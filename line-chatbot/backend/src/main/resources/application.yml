@@ -1,0 +1,65 @@
+spring:
+  profiles:
+    active: ${DB_TYPE:mysql}
+  jpa:
+    open-in-view: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      lettuce:
+        pool:
+          max-active: 10
+          max-idle: 5
+          min-idle: 2
+
+server:
+  port: 8080
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 20
+    accept-count: 100
+    connection-timeout: 5000
+
+line:
+  bot:
+    channel-token: ${LINE_CHANNEL_TOKEN:dummy-token}
+    channel-secret: ${LINE_CHANNEL_SECRET:dummy-secret}
+
+jwt:
+  secret: ${JWT_SECRET:default-jwt-secret-must-be-changed-in-production-min-256-bits}
+  expiration: 86400000
+
+ai:
+  provider: ${AI_PROVIDER:openai}
+  openai:
+    api-key: ${OPENAI_API_KEY:}
+    model: gpt-4o-mini
+    base-url: https://api.openai.com/v1
+
+redis:
+  ttl:
+    qa-cache: 3600
+    rate-limit: 60
+
+rate-limit:
+  max-requests: 100
+
+admin:
+  username: ${ADMIN_USERNAME:admin}
+  password: ${ADMIN_PASSWORD:admin123}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+
+logging:
+  level:
+    com.linechatbot: INFO
+    org.springframework.security: WARN

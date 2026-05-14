@@ -1,0 +1,42 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=MySQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    database-platform: org.hibernate.dialect.H2Dialect
+    show-sql: false
+  flyway:
+    enabled: false
+  data:
+    redis:
+      host: localhost   # overridden by @DynamicPropertySource in integration tests
+      port: 6379
+
+line:
+  bot:
+    channel-token: test-channel-token
+    channel-secret: test-channel-secret
+
+jwt:
+  # base64("test-jwt-secret-at-least-32-bytes") = 34 bytes = 272 bits, valid for HS256
+  secret: dGVzdC1qd3Qtc2VjcmV0LWF0LWxlYXN0LTMyLWJ5dGVz
+  expiration: 3600000
+
+ai:
+  provider: openai
+  openai:
+    api-key: test-openai-key
+    model: gpt-4o-mini
+    base-url: https://api.openai.com/v1
+
+redis:
+  ttl:
+    qa-cache: 3600
+    rate-limit: 60
+
+rate-limit:
+  max-requests: 100
