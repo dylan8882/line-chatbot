@@ -10,6 +10,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import QAManagement from './pages/QAManagement'
 import UsageMonitor from './pages/UsageMonitor'
+import LineSettings from './pages/LineSettings'
 import Layout from './components/Layout/Layout'
 
 /** 路由保護：未登入自動導向 /login */
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="qa" element={<QAManagement />} />
             <Route path="usage" element={<UsageMonitor />} />
+            <Route path="line-settings" element={<LineSettings />} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

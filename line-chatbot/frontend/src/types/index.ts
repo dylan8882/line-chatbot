@@ -82,3 +82,33 @@ export interface MessageLog {
   latencyMs: number
   createdAt: string
 }
+
+/** LINE Messaging API 頻道設定（GET 回應，敏感欄位已遮罩） */
+export interface LineChannelConfig {
+  isConfigured: boolean
+  channelId: string | null
+  /** 遮罩值，例如 "****a1b2" */
+  channelSecretMasked: string | null
+  /** 遮罩值，例如 "****a1b2" */
+  channelAccessTokenMasked: string | null
+  serverBaseUrl: string | null
+  /** 後端計算的 Webhook URL = serverBaseUrl + "/webhook" */
+  webhookUrl: string | null
+  webhookEnabled: boolean
+  autoReplyEnabled: boolean
+  greetingEnabled: boolean
+  updatedAt: string | null
+}
+
+/** LINE 頻道設定更新請求（PUT） */
+export interface LineChannelConfigUpdate {
+  channelId?: string | null
+  /** null = 不更新；空字串 = 清除 */
+  channelSecret?: string | null
+  /** null = 不更新；空字串 = 清除 */
+  channelAccessToken?: string | null
+  serverBaseUrl?: string | null
+  webhookEnabled?: boolean
+  autoReplyEnabled?: boolean
+  greetingEnabled?: boolean
+}
