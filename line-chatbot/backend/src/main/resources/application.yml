@@ -12,6 +12,10 @@ spring:
           max-active: 10
           max-idle: 5
           min-idle: 2
+  devtools:
+    restart:
+      # Security 相關 bean 在 hot reload 後容易失效，改用完整重啟
+      additional-exclude: "**/SecurityConfig.class,**/JwtTokenProvider.class,**/JwtAuthenticationFilter.class"
 
 server:
   port: 8080
@@ -28,7 +32,7 @@ line:
     channel-secret: ${LINE_CHANNEL_SECRET:dummy-secret}
 
 jwt:
-  secret: ${JWT_SECRET:default-jwt-secret-must-be-changed-in-production-min-256-bits}
+  secret: ${JWT_SECRET:bGluZWNoYXRib3QtbG9jYWwtZGV2LXNlY3JldC1rZXktcGxlYXNlLWNoYW5nZQ==}
   expiration: 86400000
 
 ai:

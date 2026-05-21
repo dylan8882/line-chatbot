@@ -102,6 +102,13 @@
             <artifactId>flyway-mysql</artifactId>
         </dependency>
 
+        <!-- Devtools：本機開發 hot reload，打包成 jar 時自動停用 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
