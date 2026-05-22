@@ -1,4 +1,5 @@
 target/
 .idea/
 META-INF/
+!src/main/resources/META-INF/
 *.class
