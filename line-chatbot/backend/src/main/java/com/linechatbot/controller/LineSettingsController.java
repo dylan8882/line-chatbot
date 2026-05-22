@@ -5,7 +5,6 @@ import com.linechatbot.service.LineSettingsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import reactor.core.publisher.Mono;
 
 import java.util.Map;
 
@@ -57,11 +56,11 @@ public class LineSettingsController {
      * 驗證 Channel Access Token 是否能成功呼叫 LINE Bot API。
      */
     @PostMapping("/verify")
-    public Mono<ResponseEntity<Map<String, Object>>> verifyToken() {
-        return lineSettingsService.verifyAccessToken()
-                .map(result -> ResponseEntity.ok(Map.<String, Object>of(
-                        "success", result.startsWith("驗證成功"),
-                        "message", result
-                )));
+    public ResponseEntity<Map<String, Object>> verifyToken() {
+        String result = lineSettingsService.verifyAccessToken();
+        return ResponseEntity.ok(Map.of(
+                "success", result.startsWith("驗證成功"),
+                "message", result
+        ));
     }
 }

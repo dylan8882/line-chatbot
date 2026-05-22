@@ -9,7 +9,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 
@@ -82,25 +81,30 @@ public class LineSettingsService {
 
     /**
      * 驗證 Channel Access Token 是否有效（呼叫 LINE Bot info API）。
+     * 使用同步回傳，避免在 Spring MVC 環境下因 Mono 切換 thread 造成 SecurityContext 丟失。
      *
      * @return 驗證結果訊息
      */
-    public Mono<String> verifyAccessToken() {
+    public String verifyAccessToken() {
         return configRepository.findById(CONFIG_ID)
                 .filter(c -> StringUtils.hasText(c.getChannelAccessToken()))
-                .map(c -> webClientBuilder.build()
-                        .get()
-                        .uri(LINE_API_BASE + "/v2/bot/info")
-                        .header("Authorization", "Bearer " + c.getChannelAccessToken())
-                        .retrieve()
-                        .bodyToMono(String.class)
-                        .timeout(Duration.ofSeconds(10))
-                        .map(body -> "驗證成功：" + body)
-                        .onErrorResume(e -> {
-                            log.warn("LINE Access Token 驗證失敗：{}", e.getMessage());
-                            return Mono.just("驗證失敗：" + e.getMessage());
-                        }))
-                .orElseGet(() -> Mono.just("尚未設定 Channel Access Token"));
+                .map(c -> {
+                    try {
+                        String body = webClientBuilder.build()
+                                .get()
+                                .uri(LINE_API_BASE + "/v2/bot/info")
+                                .header("Authorization", "Bearer " + c.getChannelAccessToken())
+                                .retrieve()
+                                .bodyToMono(String.class)
+                                .timeout(Duration.ofSeconds(10))
+                                .block();
+                        return "驗證成功：" + body;
+                    } catch (Exception e) {
+                        log.warn("LINE Access Token 驗證失敗：{}", e.getMessage());
+                        return "驗證失敗：" + e.getMessage();
+                    }
+                })
+                .orElse("尚未設定 Channel Access Token");
     }
 
     // ── 私有方法 ──────────────────────────────────────────────────────────────
