@@ -3,6 +3,7 @@ package com.linechatbot.config;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
@@ -13,6 +14,7 @@ import java.util.concurrent.ThreadPoolExecutor;
  * 與 LINE webhook 池隔離，避免推播大量任務塞滿後影響即時回覆。
  */
 @Configuration
+@EnableScheduling
 @Slf4j
 public class BroadcastConfig {
 

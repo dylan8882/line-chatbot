@@ -1,7 +1,6 @@
 package com.linechatbot.controller;
 
 import com.linechatbot.model.dto.BroadcastCreateRequest;
-import com.linechatbot.service.BroadcastDispatchService;
 import com.linechatbot.service.BroadcastService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,7 +20,6 @@ import java.util.Map;
 public class BroadcastController {
 
     private final BroadcastService broadcastService;
-    private final BroadcastDispatchService dispatchService;
 
     /**
      * 任務列表
@@ -79,8 +77,7 @@ public class BroadcastController {
         if (lineUserId == null || lineUserId.isBlank()) {
             throw new IllegalArgumentException("lineUserId 不可為空");
         }
-        String content = broadcastService.getDetail(id).getMessageContent();
-        String requestId = dispatchService.testSend(content, lineUserId);
+        String requestId = broadcastService.testSend(id, lineUserId);
         return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", Map.of("requestId", requestId),

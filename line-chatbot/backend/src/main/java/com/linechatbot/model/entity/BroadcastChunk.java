@@ -50,6 +50,16 @@ public class BroadcastChunk {
     @Builder.Default
     private Integer attempts = 0;
 
+    @Column(name = "next_retry_at")
+    private LocalDateTime nextRetryAt;
+
+    @Column(name = "last_attempt_at")
+    private LocalDateTime lastAttemptAt;
+
+    @Column(name = "max_attempts", nullable = false)
+    @Builder.Default
+    private Integer maxAttempts = 4;
+
     @Column(name = "line_request_id", length = 100)
     private String lineRequestId;
 

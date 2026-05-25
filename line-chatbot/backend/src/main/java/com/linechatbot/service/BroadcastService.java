@@ -15,6 +15,10 @@ import com.linechatbot.model.entity.MessageTemplate;
 import com.linechatbot.repository.BroadcastChunkRepository;
 import com.linechatbot.repository.BroadcastTaskRepository;
 import com.linechatbot.repository.LineUserRepository;
+import com.linecorp.bot.client.base.Result;
+import com.linecorp.bot.messaging.client.MessagingApiClient;
+import com.linecorp.bot.messaging.model.Message;
+import com.linecorp.bot.messaging.model.PushMessageRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -28,6 +32,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -43,7 +48,9 @@ public class BroadcastService {
     private final BroadcastChunkRepository chunkRepository;
     private final LineUserRepository lineUserRepository;
     private final MessageTemplateService templateService;
-    private final BroadcastDispatchService dispatchService;
+    private final BroadcastQueueService queueService;
+    private final BroadcastCounterService counterService;
+    private final MessagingApiClient messagingApiClient;
     private final ObjectMapper objectMapper;
 
     private static final Set<String> ALLOWED_TARGET_TYPES = Set.of("ALL", "TAGS", "USER_LIST");
@@ -132,8 +139,9 @@ public class BroadcastService {
             return toDTO(task);
         }
 
-        // 切片建立 chunks
+        // 切片建立 chunks 並收集 ID
         int idx = 0;
+        List<Long> chunkIds = new ArrayList<>();
         for (int i = 0; i < recipients.size(); i += BroadcastConfig.CHUNK_SIZE) {
             List<String> slice = recipients.subList(i, Math.min(i + BroadcastConfig.CHUNK_SIZE, recipients.size()));
             BroadcastChunk chunk = BroadcastChunk.builder()
@@ -142,7 +150,8 @@ public class BroadcastService {
                     .recipientIds(toJson(slice))
                     .status("PENDING")
                     .build();
-            chunkRepository.save(chunk);
+            BroadcastChunk saved = chunkRepository.save(chunk);
+            chunkIds.add(saved.getId());
         }
 
         task.setTotalRecipients(recipients.size());
@@ -151,12 +160,15 @@ public class BroadcastService {
         task.setSentCount(0);
         task.setSuccessCount(0);
         task.setFailedCount(0);
+        taskRepository.save(task);
+
+        // 初始化 Redis 計數器（INCR 從 0 開始）
+        counterService.initTask(task.getId(), recipients.size());
+
+        // 推入 Redis Stream，由 worker pool 並行消費
+        queueService.enqueueBatch(chunkIds);
 
         log.info("提交推播任務：id={}, 收件人={}, 分片={}", task.getId(), recipients.size(), idx);
-
-        // Async 派發（透過 Spring proxy 確保 @Async 生效）
-        dispatchService.dispatchAsync(task.getId());
-
         return toDTO(task);
     }
 
@@ -175,15 +187,44 @@ public class BroadcastService {
 
         task.setStatus("CANCELLED");
         task.setFinishedAt(LocalDateTime.now());
+        taskRepository.save(task);
 
         List<BroadcastChunk> chunks = chunkRepository.findByTaskIdOrderByChunkIndex(taskId);
+        List<Long> retryIdsToRemove = new ArrayList<>();
         for (BroadcastChunk c : chunks) {
-            if ("PENDING".equals(c.getStatus())) {
+            if ("PENDING".equals(c.getStatus()) || "RETRYING".equals(c.getStatus())) {
                 c.setStatus("CANCELLED");
+                chunkRepository.save(c);
+                retryIdsToRemove.add(c.getId());
             }
         }
-        log.info("已取消推播任務：id={}", taskId);
+        // 從 retry zset 移除（避免 scheduler 重新推入 stream）
+        queueService.removeRetries(retryIdsToRemove);
+
+        // 清除 Redis 計數鍵
+        counterService.clearTask(taskId);
+
+        log.info("已取消推播任務：id={}, 取消的 chunk 數={}", taskId, retryIdsToRemove.size());
         return toDTO(task);
+    }
+
+    /**
+     * 測試發送：對單一 lineUserId 用 pushMessage，不影響任務統計。
+     */
+    public String testSend(Long taskId, String lineUserId) {
+        BroadcastTask task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("BroadcastTask", taskId));
+        List<Message> messages = parseMessages(task.getMessageContent());
+        UUID retryKey = UUID.randomUUID();
+        try {
+            Result<?> result = messagingApiClient
+                    .pushMessage(retryKey, new PushMessageRequest(lineUserId, messages, false, null))
+                    .get();
+            return result.requestId();
+        } catch (Exception e) {
+            log.error("測試推播失敗：userId={}", lineUserId, e);
+            throw new IllegalArgumentException("測試推播失敗：" + e.getMessage());
+        }
     }
 
     // ── 內部工具 ────────────────────────────────────────────────
@@ -289,6 +330,14 @@ public class BroadcastService {
             if (intersection.isEmpty()) break;
         }
         return intersection == null ? List.of() : new ArrayList<>(intersection);
+    }
+
+    private List<Message> parseMessages(String messageContent) {
+        try {
+            return objectMapper.readValue(messageContent, new TypeReference<>() {});
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("messages JSON 解析失敗：" + e.getOriginalMessage());
+        }
     }
 
     private String toJson(List<String> list) {
