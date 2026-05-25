@@ -13,6 +13,10 @@ import UsageMonitor from './pages/UsageMonitor'
 import LineSettings from './pages/LineSettings'
 import TagManagement from './pages/TagManagement'
 import LineUsers from './pages/LineUsers'
+import MessageTemplates from './pages/MessageTemplates'
+import BroadcastList from './pages/BroadcastList'
+import BroadcastCreate from './pages/BroadcastCreate'
+import BroadcastDetail from './pages/BroadcastDetail'
 import Layout from './components/Layout/Layout'
 
 /** 路由保護：未登入自動導向 /login */
@@ -42,6 +46,10 @@ export default function App() {
             <Route path="line-settings" element={<LineSettings />} />
             <Route path="line-users" element={<LineUsers />} />
             <Route path="tags" element={<TagManagement />} />
+            <Route path="templates" element={<MessageTemplates />} />
+            <Route path="broadcasts" element={<BroadcastList />} />
+            <Route path="broadcasts/new" element={<BroadcastCreate />} />
+            <Route path="broadcasts/:id" element={<BroadcastDetail />} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

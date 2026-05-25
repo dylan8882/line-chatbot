@@ -47,4 +47,16 @@ public interface LineUserRepository extends JpaRepository<LineUser, Long> {
             WHERE t.id IN :tagIds AND u.status = 'FOLLOWED'
             """)
     List<String> findLineUserIdsByTagIds(@Param("tagIds") List<Long> tagIds);
+
+    /**
+     * 全部已加好友的用戶 LINE userId（推播 ALL 用）
+     */
+    @Query("SELECT u.lineUserId FROM LineUser u WHERE u.status = 'FOLLOWED'")
+    List<String> findAllFollowedLineUserIds();
+
+    /**
+     * 依資料庫 ID 取得 LINE userId（USER_LIST 推播用）
+     */
+    @Query("SELECT u.lineUserId FROM LineUser u WHERE u.id IN :ids AND u.status = 'FOLLOWED'")
+    List<String> findLineUserIdsByIds(@Param("ids") List<Long> ids);
 }

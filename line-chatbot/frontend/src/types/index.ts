@@ -161,3 +161,105 @@ export interface BulkTagRequest {
   tagIds: number[]
   action: BulkTagAction
 }
+
+// ── 推播功能：模板與任務 ────────────────────────────────────────
+
+/** 訊息類型 */
+export type MessageType = 'TEXT' | 'FLEX' | 'IMAGE' | 'TEMPLATE'
+
+/** 訊息模板 */
+export interface MessageTemplate {
+  id: number
+  name: string
+  messageType: MessageType
+  /** LINE messages 物件陣列 JSON 字串 */
+  content: string
+  thumbnail: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MessageTemplateInput {
+  name: string
+  messageType: MessageType
+  content: string
+  thumbnail?: string | null
+}
+
+/** 推播目標類型 */
+export type BroadcastTargetType = 'ALL' | 'TAGS' | 'USER_LIST'
+
+/** 多標籤匹配方式 */
+export type TagMatch = 'ANY' | 'ALL'
+
+/** 推播任務狀態 */
+export type BroadcastStatus =
+  | 'DRAFT'
+  | 'QUEUED'
+  | 'SCHEDULED'
+  | 'RUNNING'
+  | 'PAUSED'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+
+/** 推播分片狀態 */
+export type BroadcastChunkStatus =
+  | 'PENDING'
+  | 'SENDING'
+  | 'SUCCESS'
+  | 'FAILED'
+  | 'RETRYING'
+  | 'CANCELLED'
+
+/** 推播分片摘要 */
+export interface BroadcastChunkSummary {
+  id: number
+  chunkIndex: number
+  recipientCount: number
+  status: BroadcastChunkStatus
+  attempts: number
+  errorCode: string | null
+  errorMessage: string | null
+  sentAt: string | null
+}
+
+/** 推播任務 */
+export interface BroadcastTask {
+  id: number
+  name: string
+  messageContent: string
+  targetType: BroadcastTargetType
+  targetFilter: string | null
+  status: BroadcastStatus
+  totalRecipients: number
+  sentCount: number
+  successCount: number
+  failedCount: number
+  scheduledAt: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  errorMessage: string | null
+  createdAt: string
+  updatedAt: string
+  chunks?: BroadcastChunkSummary[]
+}
+
+/** 建立推播任務請求 */
+export interface BroadcastCreateRequest {
+  name: string
+  templateId?: number
+  messageContent?: string
+  targetType: BroadcastTargetType
+  tagIds?: number[]
+  tagMatch?: TagMatch
+  userIds?: number[]
+  scheduledAt?: string | null
+  idempotencyKey?: string
+}
+
+/** 預估回應 */
+export interface BroadcastEstimate {
+  totalRecipients: number
+  totalChunks: number
+}

@@ -10,6 +10,8 @@ import {
   ApiOutlined,
   UserOutlined,
   TagsOutlined,
+  NotificationOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -40,6 +42,16 @@ const menuItems = [
     key: '/tags',
     icon: <TagsOutlined />,
     label: '標籤管理',
+  },
+  {
+    key: '/templates',
+    icon: <FileTextOutlined />,
+    label: '訊息模板',
+  },
+  {
+    key: '/broadcasts',
+    icon: <NotificationOutlined />,
+    label: '推播管理',
   },
   {
     key: '/line-settings',
