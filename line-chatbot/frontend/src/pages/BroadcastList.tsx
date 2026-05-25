@@ -5,10 +5,11 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Progress, Select, Space, Table, Tag, Typography, message } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { ExperimentOutlined, PlusOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import { getBroadcasts } from '../api/broadcasts'
+import usePermissions from '../hooks/usePermissions'
 import type { BroadcastStatus, BroadcastTask } from '../types'
 
 const { Title } = Typography
@@ -39,6 +40,7 @@ const STATUS_LABEL: Record<BroadcastStatus, string> = {
 
 export default function BroadcastList() {
   const navigate = useNavigate()
+  const { canCreateBroadcast } = usePermissions()
   const [data, setData] = useState<BroadcastTask[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -133,9 +135,16 @@ export default function BroadcastList() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>推播管理</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/broadcasts/new')}>
-          新增推播
-        </Button>
+        {canCreateBroadcast && (
+          <Space>
+            <Button icon={<ExperimentOutlined />} onClick={() => navigate('/broadcasts/ab-test/new')}>
+              新增 A/B 測試
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/broadcasts/new')}>
+              新增推播
+            </Button>
+          </Space>
+        )}
       </div>
 
       <Space style={{ marginBottom: 16 }}>

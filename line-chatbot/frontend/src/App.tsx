@@ -17,6 +17,8 @@ import MessageTemplates from './pages/MessageTemplates'
 import BroadcastList from './pages/BroadcastList'
 import BroadcastCreate from './pages/BroadcastCreate'
 import BroadcastDetail from './pages/BroadcastDetail'
+import AbTestCreate from './pages/AbTestCreate'
+import AbTestComparison from './pages/AbTestComparison'
 import Layout from './components/Layout/Layout'
 
 /** 路由保護：未登入自動導向 /login */
@@ -49,6 +51,8 @@ export default function App() {
             <Route path="templates" element={<MessageTemplates />} />
             <Route path="broadcasts" element={<BroadcastList />} />
             <Route path="broadcasts/new" element={<BroadcastCreate />} />
+            <Route path="broadcasts/ab-test/new" element={<AbTestCreate />} />
+            <Route path="broadcasts/ab-test/:abTestId" element={<AbTestComparison />} />
             <Route path="broadcasts/:id" element={<BroadcastDetail />} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

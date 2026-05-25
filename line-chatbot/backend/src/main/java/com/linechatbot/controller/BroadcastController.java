@@ -1,5 +1,6 @@
 package com.linechatbot.controller;
 
+import com.linechatbot.model.dto.AbTestCreateRequest;
 import com.linechatbot.model.dto.BroadcastCreateRequest;
 import com.linechatbot.service.BroadcastProgressService;
 import com.linechatbot.service.BroadcastService;
@@ -10,6 +11,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -52,6 +54,7 @@ public class BroadcastController {
     }
 
     @PostMapping
+    @PreAuthorize("hasAnyRole('MARKETER', 'MANAGER', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> create(@Valid @RequestBody BroadcastCreateRequest req) {
         return ResponseEntity.ok(Map.of(
                 "success", true,
@@ -77,6 +80,7 @@ public class BroadcastController {
      * POST /api/broadcasts/{id}/test  Body: { "lineUserId": "U..." }
      */
     @PostMapping("/{id}/test")
+    @PreAuthorize("hasAnyRole('MARKETER', 'MANAGER', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> test(@PathVariable Long id,
                                                      @RequestBody Map<String, String> body) {
         String lineUserId = body.get("lineUserId");
@@ -95,6 +99,7 @@ public class BroadcastController {
      * 提交任務執行
      */
     @PostMapping("/{id}/submit")
+    @PreAuthorize("hasAnyRole('MANAGER', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> submit(@PathVariable Long id) {
         return ResponseEntity.ok(Map.of(
                 "success", true,
@@ -107,6 +112,7 @@ public class BroadcastController {
      * 取消任務
      */
     @PostMapping("/{id}/cancel")
+    @PreAuthorize("hasAnyRole('MANAGER', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> cancel(@PathVariable Long id) {
         return ResponseEntity.ok(Map.of(
                 "success", true,
@@ -160,6 +166,31 @@ public class BroadcastController {
         return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", statisticsService.getFailures(id),
+                "message", "查詢成功"
+        ));
+    }
+
+    /**
+     * 建立 A/B 測試任務：一次切出 N 個 variant 任務，可分別 submit
+     */
+    @PostMapping("/ab-test")
+    @PreAuthorize("hasAnyRole('MARKETER', 'MANAGER', 'ADMIN')")
+    public ResponseEntity<Map<String, Object>> createAbTest(@Valid @RequestBody AbTestCreateRequest req) {
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "data", broadcastService.createAbTest(req),
+                "message", "A/B 測試已建立"
+        ));
+    }
+
+    /**
+     * 取得 A/B 測試各 variant 的成效比較
+     */
+    @GetMapping("/ab-test/{abTestId}")
+    public ResponseEntity<Map<String, Object>> getAbTestComparison(@PathVariable String abTestId) {
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "data", broadcastService.getAbTestComparison(abTestId),
                 "message", "查詢成功"
         ));
     }

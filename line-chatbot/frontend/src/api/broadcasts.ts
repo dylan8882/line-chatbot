@@ -3,6 +3,8 @@
  */
 import client from './client'
 import type {
+  AbTestComparison,
+  AbTestCreateRequest,
   ApiResponse,
   BroadcastCreateRequest,
   BroadcastEstimate,
@@ -53,6 +55,12 @@ export const getBroadcastStatistics = (id: number) =>
 
 export const getBroadcastFailures = (id: number) =>
   client.get<ApiResponse<BroadcastFailure[]>>(`/broadcasts/${id}/failures`)
+
+export const createAbTest = (data: AbTestCreateRequest) =>
+  client.post<ApiResponse<BroadcastTask[]>>('/broadcasts/ab-test', data)
+
+export const getAbTestComparison = (abTestId: string) =>
+  client.get<ApiResponse<AbTestComparison>>(`/broadcasts/ab-test/${abTestId}`)
 
 /**
  * 建立 SSE 進度連線。EventSource 不支援自訂 Header，所以 JWT 用 query string。

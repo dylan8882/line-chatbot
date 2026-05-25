@@ -4,6 +4,7 @@ import com.linechatbot.model.dto.LineChannelConfigDTO;
 import com.linechatbot.service.LineSettingsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -20,6 +21,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/line-settings")
 @RequiredArgsConstructor
+@PreAuthorize("hasRole('ADMIN')")
 public class LineSettingsController {
 
     private final LineSettingsService lineSettingsService;

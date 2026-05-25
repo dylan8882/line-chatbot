@@ -7,6 +7,7 @@ import com.linechatbot.exception.ResourceNotFoundException;
 import com.linechatbot.model.dto.MessageTemplateDTO;
 import com.linechatbot.model.entity.MessageTemplate;
 import com.linechatbot.repository.MessageTemplateRepository;
+import com.linechatbot.security.CurrentUserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -26,6 +27,7 @@ public class MessageTemplateService {
     private static final Set<String> ALLOWED_TYPES = Set.of("TEXT", "FLEX", "IMAGE", "TEMPLATE");
 
     private final MessageTemplateRepository templateRepository;
+    private final CurrentUserService currentUserService;
     private final ObjectMapper objectMapper;
 
     public List<MessageTemplateDTO> getAll() {
@@ -53,6 +55,7 @@ public class MessageTemplateService {
                 .messageType(dto.getMessageType())
                 .content(dto.getContent())
                 .thumbnail(dto.getThumbnail())
+                .createdBy(currentUserService.getCurrentUser().orElse(null))
                 .build();
         MessageTemplate saved = templateRepository.save(template);
         log.info("建立訊息模板：name={}, type={}", saved.getName(), saved.getMessageType());

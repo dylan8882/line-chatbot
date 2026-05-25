@@ -187,7 +187,7 @@ export interface MessageTemplateInput {
 }
 
 /** 推播目標類型 */
-export type BroadcastTargetType = 'ALL' | 'TAGS' | 'USER_LIST'
+export type BroadcastTargetType = 'ALL' | 'TAGS' | 'USER_LIST' | 'NARROWCAST'
 
 /** 多標籤匹配方式 */
 export type TagMatch = 'ANY' | 'ALL'
@@ -243,6 +243,9 @@ export interface BroadcastTask {
   createdAt: string
   updatedAt: string
   chunks?: BroadcastChunkSummary[]
+  abTestId?: string | null
+  variantLabel?: string | null
+  narrowcastRequestId?: string | null
 }
 
 /** 建立推播任務請求 */
@@ -293,6 +296,45 @@ export interface BroadcastStatistics {
   durationMs: number | null
   sendRatePerSecond: number
   errorBreakdown: { errorCode: string; count: number }[]
+}
+
+/** A/B 測試 variant 設定 */
+export interface AbTestVariant {
+  label: string
+  templateId?: number
+  messageContent?: string
+  trafficPercent: number
+}
+
+/** A/B 測試建立請求 */
+export interface AbTestCreateRequest {
+  name: string
+  variants: AbTestVariant[]
+  targetType: BroadcastTargetType
+  tagIds?: number[]
+  tagMatch?: TagMatch
+  userIds?: number[]
+  scheduledAt?: string | null
+  idempotencyKey?: string
+}
+
+/** A/B 測試 variant 統計 */
+export interface AbTestVariantStat {
+  taskId: number
+  label: string
+  status: BroadcastStatus
+  totalRecipients: number
+  sentCount: number
+  successCount: number
+  failedCount: number
+  successRate: number
+}
+
+/** A/B 測試比較結果 */
+export interface AbTestComparison {
+  abTestId: string
+  taskName: string
+  variants: AbTestVariantStat[]
 }
 
 /** 失敗 chunk 詳情 */

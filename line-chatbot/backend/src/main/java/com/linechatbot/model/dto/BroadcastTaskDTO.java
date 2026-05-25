@@ -31,6 +31,12 @@ public class BroadcastTaskDTO {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    /** A/B 測試組 ID（null = 非 A/B 測試任務） */
+    private String abTestId;
+    private String variantLabel;
+    /** Narrowcast 任務的 LINE request id，用於追蹤進度 */
+    private String narrowcastRequestId;
+
     /** 任務的所有 chunk 摘要（詳情頁用） */
     private List<ChunkSummary> chunks;
 

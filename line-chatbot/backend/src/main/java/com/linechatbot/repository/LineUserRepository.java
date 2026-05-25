@@ -59,4 +59,8 @@ public interface LineUserRepository extends JpaRepository<LineUser, Long> {
      */
     @Query("SELECT u.lineUserId FROM LineUser u WHERE u.id IN :ids AND u.status = 'FOLLOWED'")
     List<String> findLineUserIdsByIds(@Param("ids") List<Long> ids);
+
+    /** 批量將 LINE userId（U... 字串）轉成內部 DB id，給 A/B 測試切分用 */
+    @Query("SELECT u.id FROM LineUser u WHERE u.lineUserId IN :lineUserIds")
+    List<Long> findIdsByLineUserIds(@Param("lineUserIds") List<String> lineUserIds);
 }

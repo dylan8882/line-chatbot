@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.linechatbot.config.BroadcastConfig;
 import com.linechatbot.exception.ResourceNotFoundException;
+import com.linechatbot.model.dto.AbTestComparisonDTO;
+import com.linechatbot.model.dto.AbTestCreateRequest;
 import com.linechatbot.model.dto.BroadcastCreateRequest;
 import com.linechatbot.model.dto.BroadcastEstimateResponse;
 import com.linechatbot.model.dto.BroadcastProgressEvent;
@@ -16,9 +18,11 @@ import com.linechatbot.model.entity.MessageTemplate;
 import com.linechatbot.repository.BroadcastChunkRepository;
 import com.linechatbot.repository.BroadcastTaskRepository;
 import com.linechatbot.repository.LineUserRepository;
+import com.linechatbot.security.CurrentUserService;
 import com.linecorp.bot.client.base.Result;
 import com.linecorp.bot.messaging.client.MessagingApiClient;
 import com.linecorp.bot.messaging.model.Message;
+import com.linecorp.bot.messaging.model.NarrowcastRequest;
 import com.linecorp.bot.messaging.model.PushMessageRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -53,9 +58,10 @@ public class BroadcastService {
     private final BroadcastCounterService counterService;
     private final BroadcastProgressService progressService;
     private final MessagingApiClient messagingApiClient;
+    private final CurrentUserService currentUserService;
     private final ObjectMapper objectMapper;
 
-    private static final Set<String> ALLOWED_TARGET_TYPES = Set.of("ALL", "TAGS", "USER_LIST");
+    private static final Set<String> ALLOWED_TARGET_TYPES = Set.of("ALL", "TAGS", "USER_LIST", "NARROWCAST");
 
     /**
      * 分頁查詢任務。
@@ -101,6 +107,12 @@ public class BroadcastService {
         String messageContent = resolveMessageContent(req);
         validateMessageContent(messageContent);
 
+        // 排程時間在未來 → 直接設 SCHEDULED；BroadcastScheduler 到時會呼叫 submit
+        String initialStatus = "DRAFT";
+        if (req.getScheduledAt() != null && req.getScheduledAt().isAfter(LocalDateTime.now())) {
+            initialStatus = "SCHEDULED";
+        }
+
         BroadcastTask task = BroadcastTask.builder()
                 .name(req.getName())
                 .messageContent(messageContent)
@@ -108,11 +120,13 @@ public class BroadcastService {
                 .targetFilter(serializeTargetFilter(req))
                 .scheduledAt(req.getScheduledAt())
                 .idempotencyKey(req.getIdempotencyKey())
-                .status("DRAFT")
+                .status(initialStatus)
+                .createdBy(currentUserService.getCurrentUser().orElse(null))
                 .build();
 
         BroadcastTask saved = taskRepository.save(task);
-        log.info("建立推播任務：id={}, name={}, targetType={}", saved.getId(), saved.getName(), saved.getTargetType());
+        log.info("建立推播任務：id={}, name={}, targetType={}, status={}",
+                saved.getId(), saved.getName(), saved.getTargetType(), saved.getStatus());
         return toDTO(saved);
     }
 
@@ -124,8 +138,14 @@ public class BroadcastService {
         BroadcastTask task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("BroadcastTask", taskId));
 
-        if (!"DRAFT".equals(task.getStatus()) && !"QUEUED".equals(task.getStatus())) {
+        if (!"DRAFT".equals(task.getStatus()) && !"QUEUED".equals(task.getStatus())
+                && !"SCHEDULED".equals(task.getStatus())) {
             throw new IllegalArgumentException("任務狀態無法提交：" + task.getStatus());
+        }
+
+        // NARROWCAST 走 LINE 平台自有的大規模分發，不需自管 chunks
+        if ("NARROWCAST".equals(task.getTargetType())) {
+            return submitNarrowcast(task);
         }
 
         // 計算當下的收件人快照
@@ -219,6 +239,134 @@ public class BroadcastService {
 
         log.info("已取消推播任務：id={}, 取消的 chunk 數={}", taskId, retryIdsToRemove.size());
         return toDTO(task);
+    }
+
+    /**
+     * 建立 A/B 測試任務：根據 variants 切分 audience 並建立 N 個獨立 BroadcastTask，
+     * 同 abTestId、不同 variantLabel；caller 之後可以個別 submit，或一次全部 submit。
+     *
+     * <p>分配採用隨機 shuffle 後依 trafficPercent 切片。</p>
+     */
+    @Transactional
+    public List<BroadcastTaskDTO> createAbTest(AbTestCreateRequest req) {
+        if (req.getVariants().stream().mapToInt(AbTestCreateRequest.Variant::getTrafficPercent).sum() != 100) {
+            throw new IllegalArgumentException("variants 的 trafficPercent 加總必須為 100");
+        }
+        if ("NARROWCAST".equals(req.getTargetType())) {
+            throw new IllegalArgumentException("NARROWCAST 不支援 A/B 測試");
+        }
+
+        // 計算 audience，隨機 shuffle
+        BroadcastCreateRequest audReq = new BroadcastCreateRequest();
+        audReq.setTargetType(req.getTargetType());
+        audReq.setTagIds(req.getTagIds());
+        audReq.setTagMatch(req.getTagMatch());
+        audReq.setUserIds(req.getUserIds());
+        List<String> recipients = new ArrayList<>(computeRecipients(audReq));
+        Collections.shuffle(recipients);
+
+        if (recipients.isEmpty()) {
+            throw new IllegalArgumentException("沒有符合條件的收件人");
+        }
+
+        // 依 trafficPercent 累計切點，切成 N 段
+        String abTestId = UUID.randomUUID().toString();
+        List<BroadcastTaskDTO> created = new ArrayList<>();
+        int total = recipients.size();
+        int offset = 0;
+        for (int i = 0; i < req.getVariants().size(); i++) {
+            AbTestCreateRequest.Variant v = req.getVariants().get(i);
+            int take = (i == req.getVariants().size() - 1)
+                    ? total - offset // 最後一個取剩下全部，避免 rounding 漏算
+                    : (int) Math.round(total * (v.getTrafficPercent() / 100.0));
+            List<String> sliceLineUserIds = recipients.subList(offset, offset + take);
+            List<Long> sliceUserIds = sliceLineUserIds.isEmpty()
+                    ? List.of()
+                    : lineUserRepository.findIdsByLineUserIds(sliceLineUserIds);
+            offset += take;
+
+            // 為這個 variant 建立 BroadcastTask（target=USER_LIST）
+            BroadcastCreateRequest variantReq = new BroadcastCreateRequest();
+            variantReq.setName(req.getName() + " [" + v.getLabel() + "]");
+            variantReq.setTemplateId(v.getTemplateId());
+            variantReq.setMessageContent(v.getMessageContent());
+            variantReq.setTargetType("USER_LIST");
+            variantReq.setUserIds(sliceUserIds);
+            variantReq.setScheduledAt(req.getScheduledAt());
+            variantReq.setIdempotencyKey(req.getIdempotencyKey() == null
+                    ? null : req.getIdempotencyKey() + "-" + v.getLabel());
+
+            BroadcastTaskDTO dto = create(variantReq);
+            // 額外設 abTestId / variantLabel
+            BroadcastTask t = taskRepository.findById(dto.getId()).orElseThrow();
+            t.setAbTestId(abTestId);
+            t.setVariantLabel(v.getLabel());
+            taskRepository.save(t);
+            dto = toDTO(t);
+            created.add(dto);
+        }
+        log.info("建立 A/B 測試：abTestId={}, variants={}, 總收件人={}",
+                abTestId, created.size(), recipients.size());
+        return created;
+    }
+
+    /**
+     * 取得 A/B 測試的比較結果（各 variant 的成效統計）。
+     */
+    public AbTestComparisonDTO getAbTestComparison(String abTestId) {
+        List<BroadcastTask> tasks = taskRepository.findByAbTestIdOrderByVariantLabel(abTestId);
+        if (tasks.isEmpty()) {
+            throw new ResourceNotFoundException("AbTest " + abTestId + " 不存在");
+        }
+        AbTestComparisonDTO dto = new AbTestComparisonDTO();
+        dto.setAbTestId(abTestId);
+        // 取掉 "[A]" 等後綴作為共同名稱
+        String firstName = tasks.get(0).getName();
+        int bracket = firstName.lastIndexOf(" [");
+        dto.setTaskName(bracket > 0 ? firstName.substring(0, bracket) : firstName);
+
+        dto.setVariants(tasks.stream().map(t -> {
+            AbTestComparisonDTO.VariantStat v = new AbTestComparisonDTO.VariantStat();
+            v.setTaskId(t.getId());
+            v.setLabel(t.getVariantLabel());
+            v.setStatus(t.getStatus());
+            v.setTotalRecipients(t.getTotalRecipients() == null ? 0 : t.getTotalRecipients());
+            v.setSentCount(t.getSentCount() == null ? 0 : t.getSentCount());
+            v.setSuccessCount(t.getSuccessCount() == null ? 0 : t.getSuccessCount());
+            v.setFailedCount(t.getFailedCount() == null ? 0 : t.getFailedCount());
+            int denom = v.getSuccessCount() + v.getFailedCount();
+            v.setSuccessRate(denom == 0 ? 0 : (v.getSuccessCount() * 1.0) / denom);
+            return v;
+        }).toList());
+        return dto;
+    }
+
+    /**
+     * 提交 NARROWCAST 任務：呼叫 LINE Narrowcast API（不自管 chunks）。
+     * 取得 X-Line-Request-Id 後存到 task.narrowcastRequestId，
+     * 由 BroadcastNarrowcastPoller 追蹤進度。
+     */
+    private BroadcastTaskDTO submitNarrowcast(BroadcastTask task) {
+        List<Message> messages = parseMessages(task.getMessageContent());
+        UUID retryKey = UUID.nameUUIDFromBytes(("narrowcast-" + task.getId()).getBytes());
+        try {
+            Result<?> result = messagingApiClient
+                    .narrowcast(retryKey, new NarrowcastRequest(messages, null, null, null, false))
+                    .get();
+            task.setNarrowcastRequestId(result.requestId());
+            task.setStatus("RUNNING");
+            task.setStartedAt(LocalDateTime.now());
+            taskRepository.save(task);
+            log.info("NARROWCAST 已提交：taskId={}, requestId={}", task.getId(), result.requestId());
+            return toDTO(task);
+        } catch (Exception e) {
+            log.error("NARROWCAST 提交失敗：taskId={}", task.getId(), e);
+            task.setStatus("FAILED");
+            task.setErrorMessage("Narrowcast 提交失敗：" + e.getMessage());
+            task.setFinishedAt(LocalDateTime.now());
+            taskRepository.save(task);
+            throw new IllegalStateException("Narrowcast 提交失敗：" + e.getMessage(), e);
+        }
     }
 
     /**
@@ -379,6 +527,9 @@ public class BroadcastService {
         dto.setErrorMessage(t.getErrorMessage());
         dto.setCreatedAt(t.getCreatedAt());
         dto.setUpdatedAt(t.getUpdatedAt());
+        dto.setAbTestId(t.getAbTestId());
+        dto.setVariantLabel(t.getVariantLabel());
+        dto.setNarrowcastRequestId(t.getNarrowcastRequestId());
         return dto;
     }
 

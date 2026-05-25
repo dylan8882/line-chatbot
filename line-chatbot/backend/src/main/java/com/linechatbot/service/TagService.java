@@ -4,6 +4,7 @@ import com.linechatbot.exception.ResourceNotFoundException;
 import com.linechatbot.model.dto.TagDTO;
 import com.linechatbot.model.entity.Tag;
 import com.linechatbot.repository.TagRepository;
+import com.linechatbot.security.CurrentUserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,6 +21,7 @@ import java.util.List;
 public class TagService {
 
     private final TagRepository tagRepository;
+    private final CurrentUserService currentUserService;
 
     /**
      * 取得所有標籤（依建立時間遞減排序）。
@@ -51,6 +53,7 @@ public class TagService {
                 .name(dto.getName())
                 .color(dto.getColor() != null ? dto.getColor() : "#1677ff")
                 .description(dto.getDescription())
+                .createdBy(currentUserService.getCurrentUser().orElse(null))
                 .build();
         Tag saved = tagRepository.save(tag);
         log.info("建立標籤：name={}, color={}", saved.getName(), saved.getColor());

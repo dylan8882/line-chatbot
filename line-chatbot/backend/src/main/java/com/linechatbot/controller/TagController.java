@@ -5,6 +5,7 @@ import com.linechatbot.service.TagService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -38,6 +39,7 @@ public class TagController {
     }
 
     @PostMapping
+    @PreAuthorize("hasAnyRole('MANAGER', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> create(@Valid @RequestBody TagDTO dto) {
         return ResponseEntity.ok(Map.of(
                 "success", true,
@@ -47,6 +49,7 @@ public class TagController {
     }
 
     @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('MANAGER', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> update(@PathVariable Long id,
                                                        @Valid @RequestBody TagDTO dto) {
         return ResponseEntity.ok(Map.of(
@@ -57,6 +60,7 @@ public class TagController {
     }
 
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('MANAGER', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> delete(@PathVariable Long id) {
         tagService.delete(id);
         return ResponseEntity.ok(Map.of(

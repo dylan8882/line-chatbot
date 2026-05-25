@@ -7,6 +7,7 @@ import {
   Alert,
   Button,
   Card,
+  DatePicker,
   Divider,
   Form,
   Input,
@@ -18,6 +19,7 @@ import {
   Typography,
   message,
 } from 'antd'
+import dayjs, { Dayjs } from 'dayjs'
 import { useNavigate } from 'react-router-dom'
 import { createBroadcast, estimateBroadcast, submitBroadcast, testSendBroadcast } from '../api/broadcasts'
 import { getMessageTemplates } from '../api/messageTemplates'
@@ -45,6 +47,7 @@ interface FormValues {
   targetType: BroadcastTargetType
   tagIds?: number[]
   tagMatch?: TagMatch
+  scheduledAt?: Dayjs | null
 }
 
 export default function BroadcastCreate() {
@@ -73,6 +76,7 @@ export default function BroadcastCreate() {
     targetType: values.targetType,
     tagIds: values.targetType === 'TAGS' ? values.tagIds : undefined,
     tagMatch: values.targetType === 'TAGS' ? values.tagMatch ?? 'ANY' : undefined,
+    scheduledAt: values.scheduledAt ? values.scheduledAt.toISOString() : undefined,
   })
 
   const handleEstimate = async () => {
@@ -235,8 +239,19 @@ export default function BroadcastCreate() {
               <Radio.Button value="ALL">全部已加好友</Radio.Button>
               <Radio.Button value="TAGS">依標籤</Radio.Button>
               <Radio.Button value="USER_LIST">指定用戶</Radio.Button>
+              <Radio.Button value="NARROWCAST">Narrowcast</Radio.Button>
             </Radio.Group>
           </Form.Item>
+
+          {targetType === 'NARROWCAST' && (
+            <Alert
+              type="info"
+              showIcon
+              message="Narrowcast 模式："
+              description="走 LINE 官方大規模分發 API，由 LINE 平台自管 audience。適合 >100K 用戶；不需自管 chunks，但無 per-user 成敗追蹤（僅彙總統計）。Phase 6 預設推送給全部已加好友。"
+              style={{ marginBottom: 8 }}
+            />
+          )}
 
           {targetType === 'TAGS' && (
             <>
@@ -264,6 +279,22 @@ export default function BroadcastCreate() {
               style={{ marginBottom: 8 }}
             />
           )}
+        </Card>
+
+        <Card title="排程" size="small" style={{ marginBottom: 16 }}>
+          <Form.Item
+            name="scheduledAt"
+            label="排程發送時間（留空 = 立即送出）"
+            help="到時間時系統會自動觸發送出"
+          >
+            <DatePicker
+              showTime
+              format="YYYY-MM-DD HH:mm"
+              placeholder="選擇日期與時間"
+              disabledDate={(d) => d.isBefore(dayjs().startOf('day'))}
+              style={{ width: 280 }}
+            />
+          </Form.Item>
         </Card>
 
         <Card title="預估與執行" size="small">

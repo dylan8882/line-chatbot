@@ -82,6 +82,18 @@ public class BroadcastTask {
     @Column(name = "idempotency_key", unique = true, length = 64)
     private String idempotencyKey;
 
+    /** A/B 測試組 ID（同一組 A/B 共用同一 abTestId，不同 variantLabel） */
+    @Column(name = "ab_test_id", length = 64)
+    private String abTestId;
+
+    /** A/B 變體標籤："A" / "B"（也可以是 "Control"/"Variant1" 等） */
+    @Column(name = "variant_label", length = 20)
+    private String variantLabel;
+
+    /** LINE Narrowcast API 回傳的 X-Line-Request-Id，用於後續查詢進度 */
+    @Column(name = "narrowcast_request_id", length = 100)
+    private String narrowcastRequestId;
+
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 

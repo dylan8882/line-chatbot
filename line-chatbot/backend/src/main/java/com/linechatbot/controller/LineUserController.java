@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -53,6 +54,7 @@ public class LineUserController {
      * POST /api/line-users/{id}/tags  Body: { "tagIds": [1, 2] }
      */
     @PostMapping("/{id}/tags")
+    @PreAuthorize("hasAnyRole('CS_AGENT', 'MARKETER', 'MANAGER', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> assignTags(@PathVariable Long id,
                                                            @RequestBody Map<String, List<Long>> body) {
         List<Long> tagIds = body.getOrDefault("tagIds", List.of());
@@ -68,6 +70,7 @@ public class LineUserController {
      * POST /api/line-users/bulk-tag  Body: { "userIds": [...], "tagIds": [...], "action": "ADD|REMOVE" }
      */
     @PostMapping("/bulk-tag")
+    @PreAuthorize("hasAnyRole('CS_AGENT', 'MARKETER', 'MANAGER', 'ADMIN')")
     public ResponseEntity<Map<String, Object>> bulkTag(@Valid @RequestBody BulkTagRequest req) {
         int affected = lineUserService.bulkTag(req);
         return ResponseEntity.ok(Map.of(
