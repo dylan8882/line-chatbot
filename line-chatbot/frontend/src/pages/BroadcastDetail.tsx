@@ -1,12 +1,15 @@
 /**
  * 推播任務詳情
- * - 顯示任務狀態、進度、訊息內容
- * - chunk 分片清單
- * - 手動重新整理進度（Phase 4 會改成 SSE 即時推送）
+ * Phase 4 升級：
+ *  - SSE 即時進度推送（取代 3 秒輪詢），event = "progress"
+ *  - 新增 StatisticsPanel（成功率、發送速率、錯誤分布）
+ *  - 新增 FailureTable（失敗 / 重試中 chunk 清單）
+ *  - 進度欄位優先採用 SSE 事件即時值，DB 詳情仍用初始/手動 refresh
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Alert,
+  Badge,
   Button,
   Card,
   Descriptions,
@@ -23,10 +26,22 @@ import { useNavigate, useParams } from 'react-router-dom'
 import type { ColumnsType } from 'antd/es/table'
 import {
   cancelBroadcast,
+  getBroadcastFailures,
   getBroadcastProgress,
+  getBroadcastStatistics,
+  openProgressStream,
   submitBroadcast,
 } from '../api/broadcasts'
-import type { BroadcastChunkStatus, BroadcastStatus, BroadcastTask } from '../types'
+import StatisticsPanel from '../components/Broadcast/StatisticsPanel'
+import FailureTable from '../components/Broadcast/FailureTable'
+import type {
+  BroadcastChunkStatus,
+  BroadcastFailure,
+  BroadcastProgressEvent,
+  BroadcastStatistics,
+  BroadcastStatus,
+  BroadcastTask,
+} from '../types'
 
 const { Title } = Typography
 
@@ -61,18 +76,30 @@ const CHUNK_STATUS_COLOR: Record<BroadcastChunkStatus, string> = {
   CANCELLED: 'default',
 }
 
+const FINAL_STATUSES: BroadcastStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED']
+
 export default function BroadcastDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [task, setTask] = useState<BroadcastTask | null>(null)
   const [loading, setLoading] = useState(false)
+  const [stats, setStats] = useState<BroadcastStatistics | null>(null)
+  const [failures, setFailures] = useState<BroadcastFailure[]>([])
+  const [sseConnected, setSseConnected] = useState(false)
+  const eventSourceRef = useRef<EventSource | null>(null)
 
-  const fetchData = useCallback(async () => {
+  const fetchAll = useCallback(async () => {
     if (!id) return
     setLoading(true)
     try {
-      const res = await getBroadcastProgress(Number(id))
-      setTask(res.data.data)
+      const [detailRes, statsRes, failsRes] = await Promise.all([
+        getBroadcastProgress(Number(id)),
+        getBroadcastStatistics(Number(id)),
+        getBroadcastFailures(Number(id)),
+      ])
+      setTask(detailRes.data.data)
+      setStats(statsRes.data.data)
+      setFailures(failsRes.data.data)
     } catch (err: unknown) {
       message.error(err instanceof Error ? err.message : '載入失敗')
     } finally {
@@ -81,22 +108,64 @@ export default function BroadcastDetail() {
   }, [id])
 
   useEffect(() => {
-    fetchData()
-  }, [fetchData])
+    fetchAll()
+  }, [fetchAll])
 
-  // 執行中時每 3 秒輪詢一次（Phase 4 會改 SSE）
+  /**
+   * SSE 連線：執行中或排隊中時建立 EventSource，事件達終態時自動斷線並 refetch。
+   */
   useEffect(() => {
-    if (!task || (task.status !== 'RUNNING' && task.status !== 'QUEUED')) return
-    const timer = setInterval(fetchData, 3000)
-    return () => clearInterval(timer)
-  }, [task, fetchData])
+    if (!task || !id) return
+    if (FINAL_STATUSES.includes(task.status)) {
+      eventSourceRef.current?.close()
+      eventSourceRef.current = null
+      setSseConnected(false)
+      return
+    }
+    if (eventSourceRef.current) return
+
+    const es = openProgressStream(Number(id))
+    eventSourceRef.current = es
+
+    es.addEventListener('connected', () => setSseConnected(true))
+    es.addEventListener('progress', (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as BroadcastProgressEvent
+        setTask((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: data.status ?? prev.status,
+                sentCount: data.sentCount ?? prev.sentCount,
+                successCount: data.successCount ?? prev.successCount,
+                failedCount: data.failedCount ?? prev.failedCount,
+                totalRecipients: data.totalRecipients ?? prev.totalRecipients,
+              }
+            : prev,
+        )
+        // 終態事件 → refetch 取最新 chunk 與 stats
+        if (data.type !== 'PROGRESS') {
+          setTimeout(fetchAll, 500)
+        }
+      } catch {
+        // 忽略解析錯誤
+      }
+    })
+    es.onerror = () => setSseConnected(false)
+
+    return () => {
+      es.close()
+      eventSourceRef.current = null
+      setSseConnected(false)
+    }
+  }, [task?.status, id, fetchAll, task])
 
   const handleSubmit = async () => {
     if (!task) return
     try {
       await submitBroadcast(task.id)
       message.success('任務已提交執行')
-      fetchData()
+      fetchAll()
     } catch (err: unknown) {
       message.error(err instanceof Error ? err.message : '操作失敗')
     }
@@ -107,7 +176,7 @@ export default function BroadcastDetail() {
     try {
       await cancelBroadcast(task.id)
       message.success('任務已取消')
-      fetchData()
+      fetchAll()
     } catch (err: unknown) {
       message.error(err instanceof Error ? err.message : '操作失敗')
     }
@@ -117,9 +186,8 @@ export default function BroadcastDetail() {
     return <div>載入中…</div>
   }
 
-  const percent = task.totalRecipients > 0
-    ? Math.round((task.sentCount / task.totalRecipients) * 100)
-    : 0
+  const percent =
+    task.totalRecipients > 0 ? Math.round((task.sentCount / task.totalRecipients) * 100) : 0
 
   const chunkColumns: ColumnsType<NonNullable<BroadcastTask['chunks']>[number]> = [
     { title: '#', dataIndex: 'chunkIndex', width: 60 },
@@ -141,24 +209,43 @@ export default function BroadcastDetail() {
     },
   ]
 
+  const showLiveBadge = !FINAL_STATUSES.includes(task.status)
+
   return (
     <div>
       <Space style={{ marginBottom: 16 }} align="center">
         <Button onClick={() => navigate('/broadcasts')}>← 回列表</Button>
-        <Title level={4} style={{ margin: 0 }}>{task.name}</Title>
+        <Title level={4} style={{ margin: 0 }}>
+          {task.name}
+        </Title>
         <Tag color={STATUS_COLOR[task.status]}>{STATUS_LABEL[task.status]}</Tag>
+        {showLiveBadge && (
+          <Badge
+            status={sseConnected ? 'processing' : 'default'}
+            text={sseConnected ? '即時連線中 (SSE)' : '即時連線中斷'}
+          />
+        )}
       </Space>
 
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>重新整理</Button>
+        <Button icon={<ReloadOutlined />} onClick={fetchAll} loading={loading}>
+          重新整理
+        </Button>
         {task.status === 'DRAFT' && (
           <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleSubmit}>
             送出執行
           </Button>
         )}
         {(task.status === 'RUNNING' || task.status === 'QUEUED' || task.status === 'PAUSED') && (
-          <Popconfirm title="確定取消此任務？" okText="取消任務" cancelText="返回" onConfirm={handleCancel}>
-            <Button danger icon={<StopOutlined />}>取消任務</Button>
+          <Popconfirm
+            title="確定取消此任務？"
+            okText="取消任務"
+            cancelText="返回"
+            onConfirm={handleCancel}
+          >
+            <Button danger icon={<StopOutlined />}>
+              取消任務
+            </Button>
           </Popconfirm>
         )}
       </Space>
@@ -175,7 +262,13 @@ export default function BroadcastDetail() {
       <Card title="進度" size="small" style={{ marginBottom: 16 }}>
         <Progress
           percent={percent}
-          status={task.status === 'FAILED' ? 'exception' : task.status === 'COMPLETED' ? 'success' : 'active'}
+          status={
+            task.status === 'FAILED'
+              ? 'exception'
+              : task.status === 'COMPLETED'
+              ? 'success'
+              : 'active'
+          }
         />
         <Space size="large" style={{ marginTop: 12 }}>
           <span>收件人：{task.totalRecipients}</span>
@@ -184,6 +277,14 @@ export default function BroadcastDetail() {
           <span style={{ color: '#ff4d4f' }}>失敗：{task.failedCount}</span>
         </Space>
       </Card>
+
+      <div style={{ marginBottom: 16 }}>
+        <StatisticsPanel stats={stats} loading={loading} />
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <FailureTable failures={failures} loading={loading} />
+      </div>
 
       <Card title="任務資訊" size="small" style={{ marginBottom: 16 }}>
         <Descriptions size="small" column={2}>

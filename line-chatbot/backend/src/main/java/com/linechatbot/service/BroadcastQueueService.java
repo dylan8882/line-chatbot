@@ -3,8 +3,12 @@ package com.linechatbot.service;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.Consumer;
 import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.PendingMessage;
+import org.springframework.data.redis.connection.stream.PendingMessages;
+import org.springframework.data.redis.connection.stream.PendingMessagesSummary;
 import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.connection.stream.StreamOffset;
@@ -14,6 +18,7 @@ import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -39,8 +44,7 @@ public class BroadcastQueueService {
     private final StringRedisTemplate redisTemplate;
 
     /**
-     * 啟動時確保 stream 與 consumer group 存在。
-     * 若 group 已存在會丟 BUSYGROUP，視為正常情況忽略。
+     * 啟動時建立 consumer group；group 已存在會丟 BUSYGROUP，視為正常情況忽略。
      */
     @PostConstruct
     public void ensureConsumerGroup() {
@@ -59,32 +63,23 @@ public class BroadcastQueueService {
         }
     }
 
-    /**
-     * 把一個 chunkId 推入 stream（producer）。
-     */
     public RecordId enqueue(Long chunkId) {
         return redisTemplate.opsForStream()
                 .add(STREAM_KEY, Map.of(CHUNK_FIELD, String.valueOf(chunkId)));
     }
 
-    /**
-     * 批量推入。
-     */
     public void enqueueBatch(List<Long> chunkIds) {
         for (Long id : chunkIds) {
             enqueue(id);
         }
     }
 
-    /**
-     * 排程 chunk 在 nextRetryAt 之後重試。
-     */
     public void scheduleRetry(Long chunkId, long nextRetryAtMs) {
         redisTemplate.opsForZSet().add(RETRY_ZSET, String.valueOf(chunkId), nextRetryAtMs);
     }
 
     /**
-     * 取得所有到期應重試的 chunkIds 並從 zset 移除（原子性：取出後不會再次取出）。
+     * 取出已到期的 chunkIds 並從 zset 移除，避免下一輪重複取出。
      */
     public List<Long> pollDueRetries(long nowMs, int maxBatch) {
         Set<ZSetOperations.TypedTuple<String>> due = redisTemplate.opsForZSet()
@@ -94,7 +89,6 @@ public class BroadcastQueueService {
         List<Long> ids = due.stream()
                 .map(t -> Long.valueOf(t.getValue()))
                 .toList();
-        // 移除已取出的 entries
         Object[] members = due.stream().map(ZSetOperations.TypedTuple::getValue).toArray();
         redisTemplate.opsForZSet().remove(RETRY_ZSET, members);
         return ids;
@@ -102,11 +96,7 @@ public class BroadcastQueueService {
 
     // ── Consumer 端 API（供 BroadcastWorker 使用） ─────────────────
 
-    /**
-     * 從 stream 讀取一筆訊息，阻塞最多 blockMs 毫秒。
-     *
-     * @return MapRecord 或 null（timeout）
-     */
+    /** @return MapRecord，超時返回 null */
     public MapRecord<String, Object, Object> readNext(String workerId, long blockMs) {
         List<MapRecord<String, Object, Object>> records = redisTemplate.opsForStream()
                 .read(Consumer.from(CONSUMER_GROUP, workerId),
@@ -116,37 +106,51 @@ public class BroadcastQueueService {
         return records.get(0);
     }
 
-    /**
-     * 確認消息已處理（XACK）。
-     */
     public void acknowledge(RecordId recordId) {
         redisTemplate.opsForStream().acknowledge(STREAM_KEY, CONSUMER_GROUP, recordId);
     }
 
-    /**
-     * 解析 chunkId 從 stream record。
-     */
     public Long parseChunkId(MapRecord<String, Object, Object> record) {
         Object value = record.getValue().get(CHUNK_FIELD);
         return value != null ? Long.valueOf(value.toString()) : null;
     }
 
-    /**
-     * 強制取消整個任務時，由 caller 清空 zset 中對應 chunkIds（避免後續重試）。
-     */
+    /** 取消任務時由 caller 清掉 zset 中對應 chunkIds，避免後續重試。 */
     public void removeRetries(List<Long> chunkIds) {
         if (chunkIds.isEmpty()) return;
         Object[] members = chunkIds.stream().map(String::valueOf).toArray();
         redisTemplate.opsForZSet().remove(RETRY_ZSET, members);
     }
 
-    /**
-     * 查看當前 retry zset 的大小（監控用）。
-     */
     public long retryQueueSize() {
         Long size = redisTemplate.opsForZSet().size(RETRY_ZSET);
         return size == null ? 0 : size;
     }
 
-    // Phase 4 會新增 PEL（pending entries list）的 dead-letter 監控
+    // ── PEL（Pending Entries List）監控與 dead-letter ─────────────
+
+    /** PEL 摘要：未 ACK 訊息總數、最舊 id 等。 */
+    public PendingMessagesSummary pendingSummary() {
+        return redisTemplate.opsForStream().pending(STREAM_KEY, CONSUMER_GROUP);
+    }
+
+    /** PEL 細節：每筆 idle 時間、所屬 consumer、deliver count。 */
+    public List<PendingMessage> pendingDetails(int max) {
+        PendingMessages messages = redisTemplate.opsForStream()
+                .pending(STREAM_KEY, CONSUMER_GROUP, Range.unbounded(), max);
+        if (messages == null) return List.of();
+        List<PendingMessage> result = new ArrayList<>(messages.size());
+        messages.forEach(result::add);
+        return result;
+    }
+
+    /** Claim 一筆 idle 過久的訊息給指定 consumer；caller 處理完需自行 acknowledge。 */
+    public MapRecord<String, Object, Object> claim(String consumerName,
+                                                    Duration minIdleTime,
+                                                    RecordId id) {
+        List<MapRecord<String, Object, Object>> claimed = redisTemplate.opsForStream()
+                .claim(STREAM_KEY, CONSUMER_GROUP, consumerName, minIdleTime, id);
+        if (claimed == null || claimed.isEmpty()) return null;
+        return claimed.get(0);
+    }
 }

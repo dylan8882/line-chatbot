@@ -1,11 +1,13 @@
 package com.linechatbot.service;
 
+import com.linechatbot.model.dto.BroadcastProgressEvent;
 import com.linechatbot.model.entity.BroadcastTask;
 import com.linechatbot.repository.BroadcastChunkRepository;
 import com.linechatbot.repository.BroadcastTaskRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -66,6 +68,8 @@ public class BroadcastCounterService {
     private final StringRedisTemplate redisTemplate;
     private final BroadcastTaskRepository taskRepository;
     private final BroadcastChunkRepository chunkRepository;
+    /** @Lazy 避免與 BroadcastProgressService 之間若有的循環依賴問題 */
+    @Lazy private final BroadcastProgressService progressService;
 
     private DefaultRedisScript<Long> incrScript;
 
@@ -97,6 +101,7 @@ public class BroadcastCounterService {
                 String.valueOf(successDelta),
                 String.valueOf(failedDelta)
         );
+        publishProgress(taskId, "PROGRESS", null);
         return isLast != null && isLast == 1L;
     }
 
@@ -123,9 +128,6 @@ public class BroadcastCounterService {
         taskRepository.save(task);
     }
 
-    /**
-     * 任務終止時清除所有 Redis 計數鍵。
-     */
     public void clearTask(Long taskId) {
         redisTemplate.delete(List.of(
                 sentKey(taskId), successKey(taskId), failedKey(taskId), totalKey(taskId)
@@ -133,9 +135,6 @@ public class BroadcastCounterService {
         redisTemplate.opsForSet().remove(DIRTY_SET, String.valueOf(taskId));
     }
 
-    /**
-     * 排程：每 5 秒將 dirty 任務的計數同步回 DB。
-     */
     @Scheduled(fixedDelayString = "${broadcast.counter.flush-interval-ms:5000}")
     public void flushDirtyTasks() {
         Set<String> dirty = redisTemplate.opsForSet().members(DIRTY_SET);
@@ -153,9 +152,7 @@ public class BroadcastCounterService {
         }
     }
 
-    /**
-     * 任務派發收尾：依 chunk 狀態決定 final status。
-     */
+    /** 依 chunk 狀態決定 task 的 final status（COMPLETED / FAILED / PARTIAL）。 */
     @Transactional
     public void finalizeTask(Long taskId) {
         BroadcastTask task = taskRepository.findById(taskId).orElse(null);
@@ -165,7 +162,6 @@ public class BroadcastCounterService {
             return;
         }
 
-        // 同步最新計數到 DB
         flushTask(taskId);
         task = taskRepository.findById(taskId).orElseThrow();
 
@@ -192,9 +188,45 @@ public class BroadcastCounterService {
         task.setFinishedAt(LocalDateTime.now());
         taskRepository.save(task);
 
+        // 終態事件廣播給 SSE 訂閱者
+        publishProgress(taskId, finalEventType(task.getStatus()), task.getStatus());
+
         clearTask(taskId);
         log.info("任務派發結束：taskId={}, status={}, success={}, failed={}",
                 taskId, task.getStatus(), success, failed);
+    }
+
+    /** 失敗只記 debug、不阻塞主流程（SSE 推送斷掉不該讓 chunk 計數出錯）。 */
+    private void publishProgress(Long taskId, String type, String statusOverride) {
+        try {
+            String status = statusOverride;
+            Integer total = readInt(totalKey(taskId));
+            Integer sent = readInt(sentKey(taskId));
+            Integer success = readInt(successKey(taskId));
+            Integer failed = readInt(failedKey(taskId));
+            if (status == null) {
+                BroadcastTask t = taskRepository.findById(taskId).orElse(null);
+                status = t != null ? t.getStatus() : null;
+            }
+            progressService.publish(BroadcastProgressEvent.builder()
+                    .type(type)
+                    .taskId(taskId)
+                    .status(status)
+                    .sentCount(sent)
+                    .successCount(success)
+                    .failedCount(failed)
+                    .totalRecipients(total)
+                    .build());
+        } catch (Exception e) {
+            log.debug("publish progress 失敗：taskId={}, type={}, error={}", taskId, type, e.getMessage());
+        }
+    }
+
+    private String finalEventType(String status) {
+        if ("COMPLETED".equals(status)) return "COMPLETED";
+        if ("FAILED".equals(status)) return "FAILED";
+        if ("CANCELLED".equals(status)) return "CANCELLED";
+        return "PROGRESS";
     }
 
     // ── 工具 ──────────────────────────────────────────────────

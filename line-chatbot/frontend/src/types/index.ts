@@ -263,3 +263,48 @@ export interface BroadcastEstimate {
   totalRecipients: number
   totalChunks: number
 }
+
+/** SSE 進度事件（與後端 BroadcastProgressEvent 對應） */
+export interface BroadcastProgressEvent {
+  type: 'PROGRESS' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+  taskId: number
+  status: BroadcastStatus | null
+  sentCount: number | null
+  successCount: number | null
+  failedCount: number | null
+  totalRecipients: number | null
+  chunkId?: number | null
+  timestamp: number
+}
+
+/** 推播成效統計 */
+export interface BroadcastStatistics {
+  taskId: number
+  status: BroadcastStatus
+  totalRecipients: number
+  totalChunks: number
+  successChunks: number
+  failedChunks: number
+  retryingChunks: number
+  pendingChunks: number
+  deliveredRecipients: number
+  successRate: number
+  avgAttempts: number
+  durationMs: number | null
+  sendRatePerSecond: number
+  errorBreakdown: { errorCode: string; count: number }[]
+}
+
+/** 失敗 chunk 詳情 */
+export interface BroadcastFailure {
+  chunkId: number
+  chunkIndex: number
+  recipientCount: number
+  attempts: number
+  status: BroadcastChunkStatus
+  errorCode: string | null
+  errorMessage: string | null
+  lastAttemptAt: string | null
+  nextRetryAt: string | null
+  lineRequestId: string | null
+}

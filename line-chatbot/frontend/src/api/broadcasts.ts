@@ -6,6 +6,8 @@ import type {
   ApiResponse,
   BroadcastCreateRequest,
   BroadcastEstimate,
+  BroadcastFailure,
+  BroadcastStatistics,
   BroadcastStatus,
   BroadcastTask,
   PageResponse,
@@ -45,3 +47,20 @@ export const testSendBroadcast = (id: number, lineUserId: string) =>
 
 export const getBroadcastProgress = (id: number) =>
   client.get<ApiResponse<BroadcastTask>>(`/broadcasts/${id}/progress`)
+
+export const getBroadcastStatistics = (id: number) =>
+  client.get<ApiResponse<BroadcastStatistics>>(`/broadcasts/${id}/statistics`)
+
+export const getBroadcastFailures = (id: number) =>
+  client.get<ApiResponse<BroadcastFailure[]>>(`/broadcasts/${id}/failures`)
+
+/**
+ * 建立 SSE 進度連線。EventSource 不支援自訂 Header，所以 JWT 用 query string。
+ * 後端 JwtAuthenticationFilter 對 Accept: text/event-stream 的請求會接受 ?token=。
+ */
+export const openProgressStream = (id: number): EventSource => {
+  const baseURL = client.defaults.baseURL ?? ''
+  const token = localStorage.getItem('token') ?? ''
+  const url = `${baseURL}/broadcasts/${id}/progress/stream?token=${encodeURIComponent(token)}`
+  return new EventSource(url)
+}

@@ -49,12 +49,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 從 Authorization Header 提取 Bearer Token
+     * 從 Authorization Header 提取 Bearer Token；SSE 端點瀏覽器無法帶 Header，
+     * 退而求其次接受 ?token=... query string。
      */
     private String extractToken(HttpServletRequest request) {
         String bearerToken = request.getHeader("Authorization");
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
             return bearerToken.substring(7);
+        }
+        // SSE 用 query string token（EventSource API 不支援自訂 Header）
+        String accept = request.getHeader("Accept");
+        if (accept != null && accept.contains("text/event-stream")) {
+            String queryToken = request.getParameter("token");
+            if (StringUtils.hasText(queryToken)) return queryToken;
         }
         return null;
     }

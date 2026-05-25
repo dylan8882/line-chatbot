@@ -15,4 +15,7 @@ public interface BroadcastChunkRepository extends JpaRepository<BroadcastChunk, 
 
     /** 任務的失敗 chunk 數，用於決定整個任務最終狀態 */
     long countByTaskIdAndStatusIn(Long taskId, List<String> statuses);
+
+    /** 失敗或重試中的 chunk（給失敗清單頁用） */
+    List<BroadcastChunk> findByTaskIdAndStatusInOrderByChunkIndex(Long taskId, List<String> statuses);
 }

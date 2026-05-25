@@ -1,13 +1,17 @@
 package com.linechatbot.controller;
 
 import com.linechatbot.model.dto.BroadcastCreateRequest;
+import com.linechatbot.service.BroadcastProgressService;
 import com.linechatbot.service.BroadcastService;
+import com.linechatbot.service.BroadcastStatisticsService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.Map;
 
@@ -20,6 +24,8 @@ import java.util.Map;
 public class BroadcastController {
 
     private final BroadcastService broadcastService;
+    private final BroadcastStatisticsService statisticsService;
+    private final BroadcastProgressService progressService;
 
     /**
      * 任務列表
@@ -110,13 +116,50 @@ public class BroadcastController {
     }
 
     /**
-     * 任務進度（一次性查詢，Phase 4 會再加 SSE）
+     * 任務進度一次性查詢
      */
     @GetMapping("/{id}/progress")
     public ResponseEntity<Map<String, Object>> progress(@PathVariable Long id) {
         return ResponseEntity.ok(Map.of(
                 "success", true,
                 "data", broadcastService.getDetail(id),
+                "message", "查詢成功"
+        ));
+    }
+
+    /**
+     * 任務進度 SSE 即時推送
+     * GET /api/broadcasts/{id}/progress/stream
+     *
+     * 注意：SSE 端點目前以 query string `?token=...` 帶 JWT，
+     * 因為瀏覽器的 EventSource 不支援自訂 Header。Phase 4 暫時透過 SecurityConfig 放行此端點，
+     * 若要嚴格認證需另外處理（例如 cookie token 或 reverse-proxy 注入 header）。
+     */
+    @GetMapping(value = "/{id}/progress/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter progressStream(@PathVariable Long id) {
+        return progressService.subscribe(id);
+    }
+
+    /**
+     * 成效統計：成功率、錯誤分布、發送速率等
+     */
+    @GetMapping("/{id}/statistics")
+    public ResponseEntity<Map<String, Object>> statistics(@PathVariable Long id) {
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "data", statisticsService.getStatistics(id),
+                "message", "查詢成功"
+        ));
+    }
+
+    /**
+     * 失敗清單：列出 FAILED / RETRYING 的 chunk 詳細資訊
+     */
+    @GetMapping("/{id}/failures")
+    public ResponseEntity<Map<String, Object>> failures(@PathVariable Long id) {
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "data", statisticsService.getFailures(id),
                 "message", "查詢成功"
         ));
     }

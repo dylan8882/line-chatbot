@@ -8,6 +8,7 @@ import com.linechatbot.config.BroadcastConfig;
 import com.linechatbot.exception.ResourceNotFoundException;
 import com.linechatbot.model.dto.BroadcastCreateRequest;
 import com.linechatbot.model.dto.BroadcastEstimateResponse;
+import com.linechatbot.model.dto.BroadcastProgressEvent;
 import com.linechatbot.model.dto.BroadcastTaskDTO;
 import com.linechatbot.model.entity.BroadcastChunk;
 import com.linechatbot.model.entity.BroadcastTask;
@@ -50,6 +51,7 @@ public class BroadcastService {
     private final MessageTemplateService templateService;
     private final BroadcastQueueService queueService;
     private final BroadcastCounterService counterService;
+    private final BroadcastProgressService progressService;
     private final MessagingApiClient messagingApiClient;
     private final ObjectMapper objectMapper;
 
@@ -200,6 +202,17 @@ public class BroadcastService {
         }
         // 從 retry zset 移除（避免 scheduler 重新推入 stream）
         queueService.removeRetries(retryIdsToRemove);
+
+        // 廣播取消事件給 SSE 訂閱者（要在 clearTask 之前，否則 Redis 計數已清除）
+        progressService.publish(BroadcastProgressEvent.builder()
+                .type("CANCELLED")
+                .taskId(taskId)
+                .status("CANCELLED")
+                .sentCount(task.getSentCount())
+                .successCount(task.getSuccessCount())
+                .failedCount(task.getFailedCount())
+                .totalRecipients(task.getTotalRecipients())
+                .build());
 
         // 清除 Redis 計數鍵
         counterService.clearTask(taskId);
