@@ -68,6 +68,15 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 業務驗證失敗（例如標籤名稱重複等）
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(errorResponse("BAD_REQUEST", ex.getMessage()));
+    }
+
+    /**
      * 其他未預期例外
      */
     @ExceptionHandler(Exception.class)

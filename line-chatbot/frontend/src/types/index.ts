@@ -112,3 +112,52 @@ export interface LineChannelConfigUpdate {
   autoReplyEnabled?: boolean
   greetingEnabled?: boolean
 }
+
+// ── 推播功能：標籤與用戶 ────────────────────────────────────────
+
+/** 標籤 */
+export interface Tag {
+  id: number
+  name: string
+  color: string
+  description: string | null
+  userCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+/** 標籤新增 / 修改請求 */
+export interface TagInput {
+  name: string
+  color?: string
+  description?: string | null
+}
+
+/** LINE 用戶狀態 */
+export type LineUserStatus = 'FOLLOWED' | 'BLOCKED'
+
+/** LINE 用戶資料 */
+export interface LineUser {
+  id: number
+  lineUserId: string
+  displayName: string | null
+  pictureUrl: string | null
+  statusMessage: string | null
+  language: string | null
+  status: LineUserStatus
+  followedAt: string | null
+  unfollowedAt: string | null
+  lastMessageAt: string | null
+  createdAt: string
+  tags: Tag[]
+}
+
+/** 批量貼標籤動作 */
+export type BulkTagAction = 'ADD' | 'REMOVE'
+
+/** 批量貼標籤請求 */
+export interface BulkTagRequest {
+  userIds: number[]
+  tagIds: number[]
+  action: BulkTagAction
+}

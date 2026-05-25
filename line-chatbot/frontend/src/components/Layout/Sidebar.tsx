@@ -3,7 +3,14 @@
  */
 import { useState } from 'react'
 import { Layout, Menu } from 'antd'
-import { DashboardOutlined, MessageOutlined, BarChartOutlined, ApiOutlined } from '@ant-design/icons'
+import {
+  DashboardOutlined,
+  MessageOutlined,
+  BarChartOutlined,
+  ApiOutlined,
+  UserOutlined,
+  TagsOutlined,
+} from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 const { Sider } = Layout
@@ -23,6 +30,16 @@ const menuItems = [
     key: '/usage',
     icon: <BarChartOutlined />,
     label: '用量監控',
+  },
+  {
+    key: '/line-users',
+    icon: <UserOutlined />,
+    label: 'LINE 用戶',
+  },
+  {
+    key: '/tags',
+    icon: <TagsOutlined />,
+    label: '標籤管理',
   },
   {
     key: '/line-settings',
