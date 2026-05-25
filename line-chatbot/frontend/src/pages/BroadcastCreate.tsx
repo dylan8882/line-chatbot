@@ -23,6 +23,7 @@ import { createBroadcast, estimateBroadcast, submitBroadcast, testSendBroadcast 
 import { getMessageTemplates } from '../api/messageTemplates'
 import { getTags } from '../api/tags'
 import TagPicker from '../components/Tags/TagPicker'
+import FlexPreview from '../components/FlexEditor/FlexPreview'
 import type {
   BroadcastCreateRequest,
   BroadcastTargetType,
@@ -146,6 +147,8 @@ export default function BroadcastCreate() {
   }
 
   const messageSource = Form.useWatch('messageSource', form)
+  const templateId = Form.useWatch('templateId', form)
+  const customContent = Form.useWatch('messageContent', form)
   const targetType = Form.useWatch('targetType', form)
 
   const templateOptions = useMemo(
@@ -153,11 +156,19 @@ export default function BroadcastCreate() {
     [templates],
   )
 
+  /** 根據目前輸入決定預覽用的 JSON 字串 */
+  const previewContent = useMemo(() => {
+    if (messageSource === 'TEMPLATE' && templateId) {
+      return templates.find((t) => t.id === templateId)?.content ?? ''
+    }
+    return customContent ?? ''
+  }, [messageSource, templateId, customContent, templates])
+
   return (
     <div>
       <Title level={4}>新增推播</Title>
 
-      <Form form={form} layout="vertical" style={{ maxWidth: 800 }}>
+      <Form form={form} layout="vertical" style={{ maxWidth: 1000 }}>
         <Card title="基本資訊" size="small" style={{ marginBottom: 16 }}>
           <Form.Item name="name" label="任務名稱" rules={[{ required: true, max: 200 }]}>
             <Input placeholder="例：2026 新春問候推播" />
@@ -172,27 +183,50 @@ export default function BroadcastCreate() {
             </Radio.Group>
           </Form.Item>
 
-          {messageSource === 'TEMPLATE' ? (
-            <Form.Item
-              name="templateId"
-              label="模板"
-              rules={[{ required: true, message: '請選擇模板' }]}
-            >
-              <Select options={templateOptions} placeholder="選擇模板" />
-            </Form.Item>
-          ) : (
-            <Form.Item
-              name="messageContent"
-              label="messages JSON 陣列"
-              rules={[{ required: true, message: '請輸入訊息內容' }]}
-            >
-              <TextArea
-                rows={10}
-                style={{ fontFamily: 'monospace' }}
-                placeholder='[{"type":"text","text":"..."}]'
-              />
-            </Form.Item>
-          )}
+          <div style={{ display: 'flex', gap: 16 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {messageSource === 'TEMPLATE' ? (
+                <Form.Item
+                  name="templateId"
+                  label="模板"
+                  rules={[{ required: true, message: '請選擇模板' }]}
+                >
+                  <Select options={templateOptions} placeholder="選擇模板" />
+                </Form.Item>
+              ) : (
+                <Form.Item
+                  name="messageContent"
+                  label="messages JSON 陣列"
+                  rules={[{ required: true, message: '請輸入訊息內容' }]}
+                >
+                  <TextArea
+                    rows={14}
+                    style={{ fontFamily: 'monospace', fontSize: 12 }}
+                    placeholder='[{"type":"text","text":"..."}]'
+                  />
+                </Form.Item>
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ marginBottom: 8, fontSize: 14 }}>即時預覽</div>
+              <div
+                style={{
+                  height: 380,
+                  overflowY: 'auto',
+                  border: '1px solid #f0f0f0',
+                  borderRadius: 4,
+                }}
+              >
+                {previewContent ? (
+                  <FlexPreview content={previewContent} width={280} />
+                ) : (
+                  <div style={{ padding: 16, color: '#999', textAlign: 'center' }}>
+                    （尚無訊息內容）
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </Card>
 
         <Card title="目標" size="small" style={{ marginBottom: 16 }}>

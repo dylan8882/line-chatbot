@@ -6,7 +6,6 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert,
   Button,
   Form,
   Input,
@@ -27,10 +26,10 @@ import {
   getMessageTemplates,
   updateMessageTemplate,
 } from '../api/messageTemplates'
+import FlexEditor from '../components/FlexEditor/FlexEditor'
 import type { MessageTemplate, MessageTemplateInput, MessageType } from '../types'
 
 const { Title } = Typography
-const { TextArea } = Input
 
 const TYPE_OPTIONS: { value: MessageType; label: string }[] = [
   { value: 'TEXT', label: '文字' },
@@ -58,7 +57,6 @@ export default function MessageTemplates() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<MessageTemplate | null>(null)
   const [form] = Form.useForm<MessageTemplateInput>()
-  const [jsonError, setJsonError] = useState<string | null>(null)
 
   const fetchData = async () => {
     setLoading(true)
@@ -80,7 +78,6 @@ export default function MessageTemplates() {
     setEditing(null)
     form.resetFields()
     form.setFieldsValue({ messageType: 'TEXT', content: SAMPLE_TEXT })
-    setJsonError(null)
     setModalOpen(true)
   }
 
@@ -92,14 +89,16 @@ export default function MessageTemplates() {
       content: prettyJson(t.content),
       thumbnail: t.thumbnail ?? undefined,
     })
-    setJsonError(null)
     setModalOpen(true)
   }
 
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields()
-      if (!validateJson(values.content)) return
+      if (!isJsonValid(values.content)) {
+        message.error('訊息內容 JSON 格式不正確')
+        return
+      }
       if (editing) {
         await updateMessageTemplate(editing.id, values)
         message.success('修改成功')
@@ -124,21 +123,13 @@ export default function MessageTemplates() {
     }
   }
 
-  const validateJson = (content: string): boolean => {
+  const isJsonValid = (content: string): boolean => {
     try {
       const parsed = JSON.parse(content)
-      if (!Array.isArray(parsed) || parsed.length === 0) {
-        setJsonError('content 必須為非空陣列')
-        return false
-      }
-      if (parsed.length > 5) {
-        setJsonError('LINE 單次最多 5 則訊息')
-        return false
-      }
-      setJsonError(null)
+      if (!Array.isArray(parsed) || parsed.length === 0) return false
+      if (parsed.length > 5) return false
       return true
-    } catch (e) {
-      setJsonError('JSON 格式錯誤：' + (e as Error).message)
+    } catch {
       return false
     }
   }
@@ -195,40 +186,38 @@ export default function MessageTemplates() {
         open={modalOpen}
         onOk={handleSubmit}
         onCancel={() => setModalOpen(false)}
-        width={720}
+        width={1000}
         okText="儲存"
         cancelText="取消"
         destroyOnClose
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="name" label="模板名稱" rules={[{ required: true, max: 100 }]}>
-            <Input placeholder="例：新春問候、優惠通知" />
-          </Form.Item>
-
-          <Form.Item name="messageType" label="訊息類型" rules={[{ required: true }]}>
-            <Select options={TYPE_OPTIONS} />
-          </Form.Item>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <Form.Item
+              name="name"
+              label="模板名稱"
+              rules={[{ required: true, max: 100 }]}
+              style={{ flex: 2 }}
+            >
+              <Input placeholder="例：新春問候、優惠通知" />
+            </Form.Item>
+            <Form.Item
+              name="messageType"
+              label="訊息類型"
+              rules={[{ required: true }]}
+              style={{ flex: 1 }}
+            >
+              <Select options={TYPE_OPTIONS} />
+            </Form.Item>
+          </div>
 
           <Form.Item
             name="content"
-            label={
-              <span>
-                訊息內容（LINE messages 陣列 JSON）{' '}
-                <a
-                  href="https://developers.line.biz/flex-simulator/"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Flex Simulator
-                </a>
-              </span>
-            }
+            label="訊息內容（左：JSON 編輯　右：即時預覽）"
             rules={[{ required: true }]}
           >
-            <TextArea rows={12} style={{ fontFamily: 'monospace' }} />
+            <FlexEditorField />
           </Form.Item>
-
-          {jsonError && <Alert type="error" message={jsonError} showIcon />}
         </Form>
       </Modal>
     </div>
@@ -241,4 +230,26 @@ function prettyJson(s: string): string {
   } catch {
     return s
   }
+}
+
+/**
+ * Form.Item 受控 wrapper：將 value/onChange 轉接給 FlexEditor，
+ * 並在載入預設時順便更新表單的 messageType 欄位。
+ */
+function FlexEditorField({
+  value,
+  onChange,
+}: {
+  value?: string
+  onChange?: (v: string) => void
+}) {
+  const form = Form.useFormInstance<MessageTemplateInput>()
+  return (
+    <FlexEditor
+      value={value ?? ''}
+      onChange={(v) => onChange?.(v)}
+      onPresetTypeChange={(type) => form.setFieldValue('messageType', type)}
+      height={420}
+    />
+  )
 }
