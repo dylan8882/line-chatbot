@@ -90,7 +90,11 @@ public class LineUserService {
 
     /**
      * 後台分頁查詢，支援暱稱關鍵字 / 狀態 / 標籤篩選。
+     *
+     * <p>{@code @Transactional(readOnly = true)} 確保整個 method 在同一個 Hibernate session 內，
+     * DTO 轉換時走 LAZY 的 {@code user.getTags()} 才能正確初始化（避免 LazyInitializationException）。
      */
+    @Transactional(readOnly = true)
     public Page<LineUserDTO> search(String keyword, String status, List<Long> tagIds, Pageable pageable) {
         String kw = (keyword != null && !keyword.isBlank()) ? keyword : null;
         String st = (status != null && !status.isBlank()) ? status : null;
@@ -149,7 +153,9 @@ public class LineUserService {
 
     /**
      * 取得單一用戶。
+     * 同理需要 transaction 才能 lazy load tags。
      */
+    @Transactional(readOnly = true)
     public LineUserDTO getById(Long id) {
         return lineUserRepository.findById(id)
                 .map(this::toDTO)

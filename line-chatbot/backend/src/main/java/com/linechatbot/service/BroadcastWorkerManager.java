@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 每個 worker 跑無限迴圈讀取 Stream、交給 ChunkProcessor 處理、ACK 訊息。
  *
  * <p>所有 worker 屬於同一個 consumer group，由 Redis 自動分配訊息（at-most-once-per-consumer，
- * 但若 worker crash 訊息會留在 PEL，Phase 4 加 dead-letter 處理）。
+ * 但若 worker crash 訊息會留在 PEL，由 {@link BroadcastDeadLetterScheduler} 重新派發）。
  */
 @Component
 @RequiredArgsConstructor
@@ -33,7 +33,12 @@ public class BroadcastWorkerManager {
     @Value("${broadcast.workers.count:4}")
     private int workerCount;
 
-    @Value("${broadcast.workers.block-ms:5000}")
+    /**
+     * XREADGROUP 阻塞時間。必須**短於** Lettuce 的 commandTimeout（RedisConfig 設 5s），
+     * 否則正常 BLOCK 等空會被當 Redis command timeout 拋出 RedisCommandTimeoutException。
+     * 預設 4000ms 留 1 秒 buffer。
+     */
+    @Value("${broadcast.workers.block-ms:4000}")
     private long blockMs;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -67,6 +72,9 @@ public class BroadcastWorkerManager {
                     chunkProcessor.process(chunkId);
                 }
                 queueService.acknowledge(record.getId());
+            } catch (org.springframework.dao.QueryTimeoutException timeout) {
+                // Lettuce commandTimeout 觸發（BLOCK 等空時的正常邊界情況）；不噴 ERROR
+                log.debug("Worker {} XREADGROUP timeout，重試", workerId);
             } catch (Exception e) {
                 log.error("Worker {} 迴圈例外：{}", workerId, e.getMessage(), e);
                 sleep(500);
