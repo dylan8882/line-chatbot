@@ -12,6 +12,7 @@ import {
   TagsOutlined,
   NotificationOutlined,
   FileTextOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -57,6 +58,11 @@ const menuItems = [
     key: '/line-settings',
     icon: <ApiOutlined />,
     label: 'LINE 串接設定',
+  },
+  {
+    key: '/ai-settings',
+    icon: <RobotOutlined />,
+    label: 'AI 設定',
   },
 ]
 

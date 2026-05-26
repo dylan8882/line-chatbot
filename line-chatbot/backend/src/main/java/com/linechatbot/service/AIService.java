@@ -1,7 +1,7 @@
 package com.linechatbot.service;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -13,39 +13,38 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * AI 服務，透過 OpenAI API 取得自然語言回應
- * 支援非同步呼叫，逾時 10 秒，發生錯誤時回傳預設訊息
+ * 呼叫 OpenAI Chat Completion 取回覆。設定走 {@link AiSettingsService}（DB 優先、env fallback），
+ * 主開關關閉時 {@link #getAIResponse} 直接回 {@link Mono#empty()}、呼叫端走 NONE 流程。
+ *
+ * <p>WebClient 每次呼叫即時建構，讓後台改 API key / model 不用重啟就生效。
  */
 @Service
+@RequiredArgsConstructor
 @Slf4j
 public class AIService {
 
-    private final WebClient webClient;
-    private final String model;
     private static final String DEFAULT_FALLBACK = "抱歉，我目前無法處理您的問題，請稍後再試或聯絡客服。";
 
-    public AIService(
-            @Value("${ai.openai.api-key}") String apiKey,
-            @Value("${ai.openai.base-url}") String baseUrl,
-            @Value("${ai.openai.model}") String model) {
-        this.model = model;
-        this.webClient = WebClient.builder()
-                .baseUrl(baseUrl)
-                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
-                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                .build();
-    }
+    private final AiSettingsService settingsService;
 
     /**
-     * 非同步呼叫 OpenAI Chat Completion API
-     * 逾時 10 秒，出錯時回傳 fallback 訊息
+     * 非同步呼叫 Chat Completion API。
      *
-     * @param userMessage 使用者輸入訊息
-     * @return AI 回覆的 Mono
+     * <ul>
+     *   <li>主開關關閉 或 沒設定 API key → 回 {@link Mono#empty()}（OA 走「無回應」流程）</li>
+     *   <li>API 呼叫失敗（401/timeout/5xx 等）→ 先記錯誤 log，再回 {@link #DEFAULT_FALLBACK}</li>
+     * </ul>
      */
     public Mono<String> getAIResponse(String userMessage) {
+        AiSettingsService.EffectiveConfig cfg = settingsService.getEffectiveConfig();
+        if (!cfg.isUsable()) {
+            log.debug("AI 未啟用或未設定 key，跳過：enabled={}, hasKey={}",
+                    cfg.enabled(), cfg.apiKey() != null && !cfg.apiKey().isBlank());
+            return Mono.empty();
+        }
+
         Map<String, Object> requestBody = Map.of(
-                "model", model,
+                "model", cfg.model(),
                 "messages", List.of(
                         Map.of("role", "system", "content", "你是一個友善的客服助理，請用繁體中文回答。"),
                         Map.of("role", "user", "content", userMessage)
@@ -54,20 +53,25 @@ public class AIService {
                 "temperature", 0.7
         );
 
-        return webClient.post()
+        WebClient client = WebClient.builder()
+                .baseUrl(cfg.baseUrl())
+                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + cfg.apiKey())
+                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .build();
+
+        return client.post()
                 .uri("/chat/completions")
                 .bodyValue(requestBody)
                 .retrieve()
                 .bodyToMono(Map.class)
                 .timeout(Duration.ofSeconds(10))
                 .map(this::extractContent)
-                .onErrorReturn(DEFAULT_FALLBACK)
-                .doOnError(e -> log.error("AI API 呼叫失敗：{}", e.getMessage()));
+                // 順序：doOnError 先記 log → onErrorReturn 再吃掉錯誤
+                // 原本順序顛倒，導致 onErrorReturn 先攔截、doOnError 永遠不觸發、出問題時看不到 log。
+                .doOnError(e -> log.error("AI API 呼叫失敗：{}", e.getMessage()))
+                .onErrorReturn(DEFAULT_FALLBACK);
     }
 
-    /**
-     * 從 OpenAI 回應中提取訊息內容
-     */
     @SuppressWarnings("unchecked")
     private String extractContent(Map<?, ?> response) {
         try {

@@ -113,6 +113,32 @@ export interface LineChannelConfigUpdate {
   greetingEnabled?: boolean
 }
 
+// ── AI 串接設定（Phase 8） ────────────────────────────────────────
+
+/** AI 設定（GET 回傳，apiKey 遮罩） */
+export interface AiConfig {
+  enabled: boolean
+  provider: string
+  /** 遮罩值，例如 "****a1b2"，未設定時為 null */
+  apiKeyMasked: string | null
+  baseUrl: string | null
+  model: string | null
+  isConfigured: boolean
+  /** "DB" / "ENV" / "NONE" — 實際生效的設定來源 */
+  effectiveSource: 'DB' | 'ENV' | 'NONE'
+  updatedAt: string | null
+}
+
+/** AI 設定更新請求（PUT） */
+export interface AiConfigUpdate {
+  enabled?: boolean
+  provider?: string
+  /** null = 不更新；空字串 = 清除 */
+  apiKey?: string | null
+  baseUrl?: string | null
+  model?: string | null
+}
+
 // ── 推播功能：標籤與用戶 ────────────────────────────────────────
 
 /** 標籤 */

@@ -1,6 +1,8 @@
 package com.linechatbot.config;
 
+import com.linechatbot.model.entity.AiConfig;
 import com.linechatbot.model.entity.User;
+import com.linechatbot.repository.AiConfigRepository;
 import com.linechatbot.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +23,7 @@ import org.springframework.stereotype.Component;
 public class DataInitializer implements ApplicationRunner {
 
     private final UserRepository userRepository;
+    private final AiConfigRepository aiConfigRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Value("${admin.username:admin}")
@@ -31,6 +34,11 @@ public class DataInitializer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        initAdmin();
+        initAiConfig();
+    }
+
+    private void initAdmin() {
         if (userRepository.existsByUsername(adminUsername)) {
             log.info("管理員帳號已存在，跳過初始化：{}", adminUsername);
             return;
@@ -44,5 +52,23 @@ public class DataInitializer implements ApplicationRunner {
 
         userRepository.save(admin);
         log.info("初始管理員帳號已建立：{}", adminUsername);
+    }
+
+    /**
+     * 確保 ai_config 表有一筆預設記錄（id=1，enabled=true、apiKey/baseUrl/model 為空）。
+     * 後台「AI 設定」頁讀到空欄位時自動 fallback 至 .env 環境變數。
+     */
+    private void initAiConfig() {
+        if (aiConfigRepository.existsById(1L)) {
+            log.info("AI 設定已存在，跳過初始化");
+            return;
+        }
+        AiConfig defaults = AiConfig.builder()
+                .id(1L)
+                .enabled(true)
+                .provider("openai")
+                .build();
+        aiConfigRepository.save(defaults);
+        log.info("初始 AI 設定已建立（enabled=true，欄位皆空，將 fallback 至環境變數）");
     }
 }
