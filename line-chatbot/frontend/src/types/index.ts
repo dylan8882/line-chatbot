@@ -328,6 +328,26 @@ export interface AbTestVariantStat {
   successCount: number
   failedCount: number
   successRate: number
+  /** Phase 7：點擊統計 */
+  totalClicks: number
+  clickRate: number
+}
+
+/** 點擊統計（單一任務） */
+export interface ClickStatistics {
+  taskId: number
+  totalClicks: number
+  uniqueIps: number
+  deliveredRecipients: number
+  ctr: number
+  links: ClickLinkStat[]
+}
+
+export interface ClickLinkStat {
+  linkId: number
+  linkIndex: number
+  targetUrl: string
+  clickCount: number
 }
 
 /** A/B 測試比較結果 */

@@ -26,6 +26,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import type { ColumnsType } from 'antd/es/table'
 import {
   cancelBroadcast,
+  getBroadcastClicks,
   getBroadcastFailures,
   getBroadcastProgress,
   getBroadcastStatistics,
@@ -34,6 +35,7 @@ import {
 } from '../api/broadcasts'
 import StatisticsPanel from '../components/Broadcast/StatisticsPanel'
 import FailureTable from '../components/Broadcast/FailureTable'
+import ClickStatsPanel from '../components/Broadcast/ClickStatsPanel'
 import type {
   BroadcastChunkStatus,
   BroadcastFailure,
@@ -41,6 +43,7 @@ import type {
   BroadcastStatistics,
   BroadcastStatus,
   BroadcastTask,
+  ClickStatistics,
 } from '../types'
 
 const { Title } = Typography
@@ -85,6 +88,7 @@ export default function BroadcastDetail() {
   const [loading, setLoading] = useState(false)
   const [stats, setStats] = useState<BroadcastStatistics | null>(null)
   const [failures, setFailures] = useState<BroadcastFailure[]>([])
+  const [clickStats, setClickStats] = useState<ClickStatistics | null>(null)
   const [sseConnected, setSseConnected] = useState(false)
   const eventSourceRef = useRef<EventSource | null>(null)
 
@@ -92,14 +96,16 @@ export default function BroadcastDetail() {
     if (!id) return
     setLoading(true)
     try {
-      const [detailRes, statsRes, failsRes] = await Promise.all([
+      const [detailRes, statsRes, failsRes, clicksRes] = await Promise.all([
         getBroadcastProgress(Number(id)),
         getBroadcastStatistics(Number(id)),
         getBroadcastFailures(Number(id)),
+        getBroadcastClicks(Number(id)),
       ])
       setTask(detailRes.data.data)
       setStats(statsRes.data.data)
       setFailures(failsRes.data.data)
+      setClickStats(clicksRes.data.data)
     } catch (err: unknown) {
       message.error(err instanceof Error ? err.message : '載入失敗')
     } finally {
@@ -280,6 +286,10 @@ export default function BroadcastDetail() {
 
       <div style={{ marginBottom: 16 }}>
         <StatisticsPanel stats={stats} loading={loading} />
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <ClickStatsPanel stats={clickStats} loading={loading} />
       </div>
 
       <div style={{ marginBottom: 16 }}>

@@ -171,6 +171,18 @@ public class BroadcastController {
     }
 
     /**
+     * Phase 7：點擊統計（CTR + 各 link 點擊數）
+     */
+    @GetMapping("/{id}/clicks")
+    public ResponseEntity<Map<String, Object>> clicks(@PathVariable Long id) {
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "data", statisticsService.getClickStatistics(id),
+                "message", "查詢成功"
+        ));
+    }
+
+    /**
      * 建立 A/B 測試任務：一次切出 N 個 variant 任務，可分別 submit
      */
     @PostMapping("/ab-test")

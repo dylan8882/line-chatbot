@@ -23,5 +23,9 @@ public class AbTestComparisonDTO {
         private int successCount;
         private int failedCount;
         private double successRate;
+
+        /** Phase 7：點擊統計 */
+        private long totalClicks;
+        private double clickRate;       // = totalClicks / successCount
     }
 }

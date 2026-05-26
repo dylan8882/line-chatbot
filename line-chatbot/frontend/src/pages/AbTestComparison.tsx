@@ -49,8 +49,15 @@ export default function AbTestComparisonPage() {
     return <Empty description={loading ? '載入中…' : '沒有資料'} />
   }
 
+  // 勝出邏輯：若有任何 variant 有 click 數據，優先以 clickRate 比較；
+  // 否則退回 successRate（送達率）
+  const hasClicks = data.variants.some((v) => v.totalClicks > 0)
   const best = data.variants.reduce(
-    (acc, v) => (v.successRate > acc.successRate ? v : acc),
+    (acc, v) => {
+      const cur = hasClicks ? v.clickRate : v.successRate
+      const top = hasClicks ? acc.clickRate : acc.successRate
+      return cur > top ? v : acc
+    },
     data.variants[0],
   )
 
@@ -99,6 +106,21 @@ export default function AbTestComparisonPage() {
       render: (r: number) => `${(r * 100).toFixed(1)}%`,
     },
     {
+      title: '點擊',
+      dataIndex: 'totalClicks',
+      width: 90,
+      align: 'right',
+    },
+    {
+      title: 'CTR',
+      dataIndex: 'clickRate',
+      width: 100,
+      align: 'right',
+      render: (r: number) => (
+        <span style={{ color: r > 0 ? '#1677ff' : '#999' }}>{(r * 100).toFixed(2)}%</span>
+      ),
+    },
+    {
       title: '操作',
       render: (_, r) => (
         <Button size="small" onClick={() => navigate(`/broadcasts/${r.taskId}`)}>
@@ -120,17 +142,32 @@ export default function AbTestComparisonPage() {
         </Button>
       </Space>
 
-      <Card title="勝出變體" size="small" style={{ marginBottom: 16 }}>
+      <Card
+        title={`勝出變體（以 ${hasClicks ? '點擊率 CTR' : '送達率'} 比較）`}
+        size="small"
+        style={{ marginBottom: 16 }}
+      >
         <Space size="large">
           <Statistic title="Variant" value={best?.label ?? '—'} />
-          <Statistic
-            title="成功率"
-            value={best ? best.successRate * 100 : 0}
-            precision={1}
-            suffix="%"
-            valueStyle={{ color: '#52c41a' }}
-          />
+          {hasClicks ? (
+            <Statistic
+              title="CTR"
+              value={best ? best.clickRate * 100 : 0}
+              precision={2}
+              suffix="%"
+              valueStyle={{ color: '#1677ff' }}
+            />
+          ) : (
+            <Statistic
+              title="成功率"
+              value={best ? best.successRate * 100 : 0}
+              precision={1}
+              suffix="%"
+              valueStyle={{ color: '#52c41a' }}
+            />
+          )}
           <Statistic title="送達人數" value={best?.successCount ?? 0} />
+          <Statistic title="點擊次數" value={best?.totalClicks ?? 0} />
         </Space>
       </Card>
 

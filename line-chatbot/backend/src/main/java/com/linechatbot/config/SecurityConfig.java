@@ -51,6 +51,7 @@ public class SecurityConfig {
                 .requestMatchers("/webhook", "/webhook/**").permitAll()
                 .requestMatchers("/api/auth/login", "/api/auth/refresh").permitAll()
                 .requestMatchers("/actuator/health").permitAll()
+                .requestMatchers("/c/**").permitAll() // Phase 7 click tracking 端點
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

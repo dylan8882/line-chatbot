@@ -6,10 +6,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.linechatbot.exception.ResourceNotFoundException;
 import com.linechatbot.model.dto.BroadcastFailureDTO;
 import com.linechatbot.model.dto.BroadcastStatisticsDTO;
+import com.linechatbot.model.dto.ClickStatisticsDTO;
 import com.linechatbot.model.entity.BroadcastChunk;
 import com.linechatbot.model.entity.BroadcastTask;
+import com.linechatbot.model.entity.ClickLink;
 import com.linechatbot.repository.BroadcastChunkRepository;
 import com.linechatbot.repository.BroadcastTaskRepository;
+import com.linechatbot.repository.ClickEventRepository;
+import com.linechatbot.repository.ClickLinkRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -31,6 +35,8 @@ public class BroadcastStatisticsService {
 
     private final BroadcastTaskRepository taskRepository;
     private final BroadcastChunkRepository chunkRepository;
+    private final ClickLinkRepository clickLinkRepository;
+    private final ClickEventRepository clickEventRepository;
     private final ObjectMapper objectMapper;
 
     /**
@@ -115,6 +121,41 @@ public class BroadcastStatisticsService {
         List<BroadcastChunk> chunks = chunkRepository
                 .findByTaskIdAndStatusInOrderByChunkIndex(taskId, List.of("FAILED", "RETRYING"));
         return chunks.stream().map(this::toFailureDTO).toList();
+    }
+
+    /**
+     * Phase 7：點擊統計。
+     *
+     * <p>CTR = totalClicks / deliveredRecipients（送達人數）。
+     * deliveredRecipients 取自 task.successCount（Phase 3 Counter 累計）。
+     */
+    public ClickStatisticsDTO getClickStatistics(Long taskId) {
+        BroadcastTask task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("BroadcastTask", taskId));
+
+        List<ClickLink> links = clickLinkRepository.findByTaskIdOrderByLinkIndex(taskId);
+        long total = clickEventRepository.countByTaskId(taskId);
+        long uniqueIps = clickEventRepository.countDistinctIpByTaskId(taskId);
+        int delivered = task.getSuccessCount() == null ? 0 : task.getSuccessCount();
+        double ctr = delivered == 0 ? 0 : (total * 1.0) / delivered;
+
+        List<ClickStatisticsDTO.LinkStat> linkStats = links.stream()
+                .map(l -> ClickStatisticsDTO.LinkStat.builder()
+                        .linkId(l.getId())
+                        .linkIndex(l.getLinkIndex())
+                        .targetUrl(l.getTargetUrl())
+                        .clickCount(l.getClickCount())
+                        .build())
+                .toList();
+
+        return ClickStatisticsDTO.builder()
+                .taskId(taskId)
+                .totalClicks(total)
+                .uniqueIps(uniqueIps)
+                .deliveredRecipients(delivered)
+                .ctr(ctr)
+                .links(linkStats)
+                .build();
     }
 
     // ── 內部 ──────────────────────────────────────────────────

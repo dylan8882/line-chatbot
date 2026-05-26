@@ -17,6 +17,7 @@ import com.linechatbot.model.entity.BroadcastTask;
 import com.linechatbot.model.entity.MessageTemplate;
 import com.linechatbot.repository.BroadcastChunkRepository;
 import com.linechatbot.repository.BroadcastTaskRepository;
+import com.linechatbot.repository.ClickEventRepository;
 import com.linechatbot.repository.LineUserRepository;
 import com.linechatbot.security.CurrentUserService;
 import com.linecorp.bot.client.base.Result;
@@ -57,6 +58,8 @@ public class BroadcastService {
     private final BroadcastQueueService queueService;
     private final BroadcastCounterService counterService;
     private final BroadcastProgressService progressService;
+    private final ClickLinkRewriter clickLinkRewriter;
+    private final ClickEventRepository clickEventRepository;
     private final MessagingApiClient messagingApiClient;
     private final CurrentUserService currentUserService;
     private final ObjectMapper objectMapper;
@@ -141,6 +144,13 @@ public class BroadcastService {
         if (!"DRAFT".equals(task.getStatus()) && !"QUEUED".equals(task.getStatus())
                 && !"SCHEDULED".equals(task.getStatus())) {
             throw new IllegalArgumentException("任務狀態無法提交：" + task.getStatus());
+        }
+
+        // Phase 7：送出前先把 messages JSON 內的 button URL 改寫為 tracking link
+        String rewritten = clickLinkRewriter.rewriteForTask(task.getId(), task.getMessageContent());
+        if (!rewritten.equals(task.getMessageContent())) {
+            task.setMessageContent(rewritten);
+            taskRepository.save(task);
         }
 
         // NARROWCAST 走 LINE 平台自有的大規模分發，不需自管 chunks
@@ -336,6 +346,10 @@ public class BroadcastService {
             v.setFailedCount(t.getFailedCount() == null ? 0 : t.getFailedCount());
             int denom = v.getSuccessCount() + v.getFailedCount();
             v.setSuccessRate(denom == 0 ? 0 : (v.getSuccessCount() * 1.0) / denom);
+            // Phase 7：點擊統計（A/B 真正用來比較的指標）
+            long clicks = clickEventRepository.countByTaskId(t.getId());
+            v.setTotalClicks(clicks);
+            v.setClickRate(v.getSuccessCount() == 0 ? 0 : (clicks * 1.0) / v.getSuccessCount());
             return v;
         }).toList());
         return dto;

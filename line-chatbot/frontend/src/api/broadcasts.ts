@@ -12,6 +12,7 @@ import type {
   BroadcastStatistics,
   BroadcastStatus,
   BroadcastTask,
+  ClickStatistics,
   PageResponse,
 } from '../types'
 
@@ -55,6 +56,9 @@ export const getBroadcastStatistics = (id: number) =>
 
 export const getBroadcastFailures = (id: number) =>
   client.get<ApiResponse<BroadcastFailure[]>>(`/broadcasts/${id}/failures`)
+
+export const getBroadcastClicks = (id: number) =>
+  client.get<ApiResponse<ClickStatistics>>(`/broadcasts/${id}/clicks`)
 
 export const createAbTest = (data: AbTestCreateRequest) =>
   client.post<ApiResponse<BroadcastTask[]>>('/broadcasts/ab-test', data)
