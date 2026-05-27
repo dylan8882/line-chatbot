@@ -31,6 +31,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -197,8 +199,15 @@ public class BroadcastService {
         // 初始化 Redis 計數器（INCR 從 0 開始）
         counterService.initTask(task.getId(), recipients.size());
 
-        // 推入 Redis Stream，由 worker pool 並行消費
-        queueService.enqueueBatch(chunkIds);
+        // 推入 Redis Stream 必須延後到 transaction commit 之後，
+        // 否則 worker 撈到 chunk id 後到 DB 找不到（race condition）。
+        final List<Long> idsToEnqueue = List.copyOf(chunkIds);
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                queueService.enqueueBatch(idsToEnqueue);
+            }
+        });
 
         log.info("提交推播任務：id={}, 收件人={}, 分片={}", task.getId(), recipients.size(), idx);
         return toDTO(task);
