@@ -9,6 +9,7 @@ import com.linechatbot.repository.BroadcastTaskRepository;
 import com.linechatbot.service.ratelimit.LineApiRateLimiter;
 import com.linecorp.bot.client.base.Result;
 import com.linecorp.bot.messaging.client.MessagingApiClient;
+import com.linecorp.bot.messaging.client.MessagingApiClientException;
 import com.linecorp.bot.messaging.model.MulticastRequest;
 import com.linecorp.bot.messaging.model.PushMessageRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -112,9 +113,9 @@ class BroadcastChunkProcessorTest {
 
         stubPushSequential(
                 success("req-1"),
-                fail("HTTP 400 Bad Request: invalid line userId"),
+                fail4xx(400),
                 success("req-2"),
-                fail("HTTP 404 Not Found"),
+                fail4xx(404),
                 success("req-3"));
 
         processor.process(2L);
@@ -133,9 +134,7 @@ class BroadcastChunkProcessorTest {
         BroadcastTask task = makeTask(30L, "PUSH");
         stubLookup(chunk, task);
 
-        stubPushSequential(
-                fail("HTTP 400 Bad Request"),
-                fail("The user hasn't added the LINE Official Account as a friend"));
+        stubPushSequential(fail4xx(400), fail4xx(403));
 
         processor.process(3L);
 
@@ -155,7 +154,7 @@ class BroadcastChunkProcessorTest {
         // 第 1 個成功 → 第 2 個 5xx fatal → 第 3 個不會被呼叫
         stubPushSequential(
                 success("req-1"),
-                fail("HTTP 500 Internal Server Error"));
+                fail5xx());
 
         processor.process(4L);
 
@@ -256,8 +255,18 @@ class BroadcastChunkProcessorTest {
         return CompletableFuture.completedFuture(successResult(requestId));
     }
 
-    private CompletableFuture<?> fail(String message) {
-        return CompletableFuture.failedFuture(new RuntimeException(message));
+    /** 模擬 LINE SDK 拋出 4xx exception；isClient4xx 用 instanceof + getCode 判斷 */
+    private CompletableFuture<?> fail4xx(int code) {
+        MessagingApiClientException ex = mock(MessagingApiClientException.class);
+        lenient().when(ex.getCode()).thenReturn(code);
+        return CompletableFuture.failedFuture(ex);
+    }
+
+    /** 5xx（或網路錯）→ 視為 fatal，走 chunk 重試 */
+    private CompletableFuture<?> fail5xx() {
+        MessagingApiClientException ex = mock(MessagingApiClientException.class);
+        lenient().when(ex.getCode()).thenReturn(500);
+        return CompletableFuture.failedFuture(ex);
     }
 
     private void stubLookup(BroadcastChunk chunk, BroadcastTask task) {

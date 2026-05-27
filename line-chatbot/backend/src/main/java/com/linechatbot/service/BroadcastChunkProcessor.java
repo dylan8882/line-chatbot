@@ -9,6 +9,7 @@ import com.linechatbot.repository.BroadcastChunkRepository;
 import com.linechatbot.repository.BroadcastTaskRepository;
 import com.linechatbot.service.ratelimit.LineApiRateLimiter;
 import com.linecorp.bot.client.base.Result;
+import com.linecorp.bot.client.base.exception.AbstractLineClientException;
 import com.linecorp.bot.messaging.client.MessagingApiClient;
 import com.linecorp.bot.messaging.model.Message;
 import com.linecorp.bot.messaging.model.MulticastRequest;
@@ -206,19 +207,19 @@ public class BroadcastChunkProcessor {
 
     /**
      * 判定 exception 是否為 LINE 回 4xx 的「永久性錯誤」（不重試）。
-     * 簡化判斷：訊息中含 4xx 數字或常見關鍵字。
+     * <p>LINE SDK 把 HTTP error 包成 {@link AbstractLineClientException}，內含 {@code getCode()}，
+     * 4xx 視為使用者端錯誤（已退追、無效 ID、訊息格式錯等），直接標記該 user failed 不重試；
+     * 其他 exception 視為 transient（網路抖動、5xx 等），走 chunk 重試流程。
+     *
+     * <p>不細分 408/429：在 push 模式下，這兩種 4xx 若立刻重試也只會再觸發；
+     * 真正大量 429 應該由 {@link com.linechatbot.service.ratelimit.LineApiRateLimiter} 預防。
      */
     private boolean isClient4xx(Exception e) {
         Throwable t = e;
         while (t != null) {
-            String msg = t.getMessage();
-            if (msg != null) {
-                String low = msg.toLowerCase();
-                if (low.contains(" 400 ") || low.contains(" 401 ") || low.contains(" 403 ")
-                        || low.contains(" 404 ") || low.contains(" 409 ") || low.contains(" 410 ")
-                        || low.contains("the user hasn't added the line official account")
-                        || low.contains("invalid line userid")
-                        || low.contains("user id is invalid")) {
+            if (t instanceof AbstractLineClientException lex) {
+                int code = lex.getCode();
+                if (code >= 400 && code < 500) {
                     return true;
                 }
             }
