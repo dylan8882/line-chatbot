@@ -266,12 +266,6 @@ export interface BroadcastTask {
   sentCount: number
   successCount: number
   failedCount: number
-  /**
-   * LINE 平台日送達增量（僅 multicast task）：
-   * 完成 ≥ 5 分鐘後由後端結算（撈 LINE delivery API 統計差異），
-   * null = 尚未結算或不適用。
-   */
-  lineDeliveredDelta?: number | null
   scheduledAt: string | null
   startedAt: string | null
   finishedAt: string | null

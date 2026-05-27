@@ -68,35 +68,26 @@ public class BroadcastService {
 
     private static final Set<String> ALLOWED_TARGET_TYPES = Set.of("ALL", "TAGS", "USER_LIST", "NARROWCAST");
 
-    /**
-     * 分頁查詢任務。
-     */
     public Page<BroadcastTaskDTO> list(String status, Pageable pageable) {
         String st = (status != null && !status.isBlank()) ? status : null;
         return taskRepository.search(st, pageable).map(this::toDTO);
     }
 
-    /**
-     * 任務詳情（含所有 chunk 摘要）。
-     */
+    /** 帶上 chunks 摘要的 detail。 */
     public BroadcastTaskDTO getDetail(Long id) {
         BroadcastTask task = taskRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("BroadcastTask", id));
         return toDetailDTO(task);
     }
 
-    /**
-     * 預估收件人數（不建立任何資料）。
-     */
+    /** 預估收件人數，不寫入任何資料。 */
     public BroadcastEstimateResponse estimate(BroadcastCreateRequest req) {
         List<String> recipients = computeRecipients(req);
         int chunks = (int) Math.ceil(recipients.size() / (double) BroadcastConfig.CHUNK_SIZE);
         return new BroadcastEstimateResponse(recipients.size(), chunks);
     }
 
-    /**
-     * 建立任務（DRAFT 狀態）。冪等：相同 idempotencyKey 直接回傳已存在的任務。
-     */
+    /** DRAFT 狀態建立；相同 idempotencyKey 視為重送、回傳既有任務。 */
     @Transactional
     public BroadcastTaskDTO create(BroadcastCreateRequest req) {
         validateTargetType(req.getTargetType());
@@ -112,7 +103,7 @@ public class BroadcastService {
         String messageContent = resolveMessageContent(req);
         validateMessageContent(messageContent);
 
-        // 排程時間在未來 → 直接設 SCHEDULED；BroadcastScheduler 到時會呼叫 submit
+        // scheduledAt 在未來 → SCHEDULED，到時 BroadcastScheduler 會替你呼叫 submit
         String initialStatus = "DRAFT";
         if (req.getScheduledAt() != null && req.getScheduledAt().isAfter(LocalDateTime.now())) {
             initialStatus = "SCHEDULED";
@@ -136,9 +127,7 @@ public class BroadcastService {
         return toDTO(saved);
     }
 
-    /**
-     * 提交任務執行：計算收件人、建立 chunks、啟動非同步派發。
-     */
+    /** 計算收件人、切片、入 Redis Stream 給 worker 派發。 */
     @Transactional
     public BroadcastTaskDTO submit(Long taskId) {
         BroadcastTask task = taskRepository.findById(taskId)
@@ -149,7 +138,7 @@ public class BroadcastService {
             throw new IllegalArgumentException("任務狀態無法提交：" + task.getStatus());
         }
 
-        // Phase 7：送出前先把 messages JSON 內的 button URL 改寫為 tracking link
+        // 送出前把 message JSON 內的外部 URL 改寫成 tracking link
         String rewritten = clickLinkRewriter.rewriteForTask(task.getId(), task.getMessageContent());
         if (!rewritten.equals(task.getMessageContent())) {
             task.setMessageContent(rewritten);
@@ -174,7 +163,6 @@ public class BroadcastService {
             return toDTO(task);
         }
 
-        // 切片建立 chunks 並收集 ID
         int idx = 0;
         List<Long> chunkIds = new ArrayList<>();
         for (int i = 0; i < recipients.size(); i += BroadcastConfig.CHUNK_SIZE) {
@@ -214,10 +202,7 @@ public class BroadcastService {
         return toDTO(task);
     }
 
-    /**
-     * 取消任務（將 PENDING chunk 與 task 狀態都標為 CANCELLED）。
-     * 已 SENDING 中的 chunk 不會中斷，但完成後不會再處理新的。
-     */
+    /** SENDING 中的 chunk 不會被中斷，但完成後不會再撈新的；PENDING / RETRYING 改 CANCELLED。 */
     @Transactional
     public BroadcastTaskDTO cancel(Long taskId) {
         BroadcastTask task = taskRepository.findById(taskId)
@@ -254,7 +239,6 @@ public class BroadcastService {
                 .totalRecipients(task.getTotalRecipients())
                 .build());
 
-        // 清除 Redis 計數鍵
         counterService.clearTask(taskId);
 
         log.info("已取消推播任務：id={}, 取消的 chunk 數={}", taskId, retryIdsToRemove.size());
@@ -262,10 +246,8 @@ public class BroadcastService {
     }
 
     /**
-     * 建立 A/B 測試任務：根據 variants 切分 audience 並建立 N 個獨立 BroadcastTask，
-     * 同 abTestId、不同 variantLabel；caller 之後可以個別 submit，或一次全部 submit。
-     *
-     * <p>分配採用隨機 shuffle 後依 trafficPercent 切片。</p>
+     * 按 variants 切 audience、建立 N 個獨立 task（同 abTestId、不同 variantLabel），
+     * 分配採隨機 shuffle 後依 trafficPercent 切片；caller 自行 submit 個別 variant。
      */
     @Transactional
     public List<BroadcastTaskDTO> createAbTest(AbTestCreateRequest req) {
@@ -276,7 +258,6 @@ public class BroadcastService {
             throw new IllegalArgumentException("NARROWCAST 不支援 A/B 測試");
         }
 
-        // 計算 audience，隨機 shuffle
         BroadcastCreateRequest audReq = new BroadcastCreateRequest();
         audReq.setTargetType(req.getTargetType());
         audReq.setTagIds(req.getTagIds());
@@ -289,7 +270,6 @@ public class BroadcastService {
             throw new IllegalArgumentException("沒有符合條件的收件人");
         }
 
-        // 依 trafficPercent 累計切點，切成 N 段
         String abTestId = UUID.randomUUID().toString();
         List<BroadcastTaskDTO> created = new ArrayList<>();
         int total = recipients.size();
@@ -305,7 +285,7 @@ public class BroadcastService {
                     : lineUserRepository.findIdsByLineUserIds(sliceLineUserIds);
             offset += take;
 
-            // 為這個 variant 建立 BroadcastTask（target=USER_LIST）
+            // variant 用 USER_LIST target 重用既有派發邏輯，不另開新的 entity / flow
             BroadcastCreateRequest variantReq = new BroadcastCreateRequest();
             variantReq.setName(req.getName() + " [" + v.getLabel() + "]");
             variantReq.setTemplateId(v.getTemplateId());
@@ -318,7 +298,6 @@ public class BroadcastService {
                     ? null : req.getIdempotencyKey() + "-" + v.getLabel());
 
             BroadcastTaskDTO dto = create(variantReq);
-            // 額外設 abTestId / variantLabel
             BroadcastTask t = taskRepository.findById(dto.getId()).orElseThrow();
             t.setAbTestId(abTestId);
             t.setVariantLabel(v.getLabel());
@@ -331,9 +310,6 @@ public class BroadcastService {
         return created;
     }
 
-    /**
-     * 取得 A/B 測試的比較結果（各 variant 的成效統計）。
-     */
     public AbTestComparisonDTO getAbTestComparison(String abTestId) {
         List<BroadcastTask> tasks = taskRepository.findByAbTestIdOrderByVariantLabel(abTestId);
         if (tasks.isEmpty()) {
@@ -357,7 +333,7 @@ public class BroadcastService {
             v.setFailedCount(t.getFailedCount() == null ? 0 : t.getFailedCount());
             int denom = v.getSuccessCount() + v.getFailedCount();
             v.setSuccessRate(denom == 0 ? 0 : (v.getSuccessCount() * 1.0) / denom);
-            // Phase 7：點擊統計（A/B 真正用來比較的指標）
+            // 點擊率才是 A/B 真正要比的（送達率對 multicast 沒意義）
             long clicks = clickEventRepository.countByTaskId(t.getId());
             v.setTotalClicks(clicks);
             v.setClickRate(v.getSuccessCount() == 0 ? 0 : (clicks * 1.0) / v.getSuccessCount());
@@ -366,11 +342,7 @@ public class BroadcastService {
         return dto;
     }
 
-    /**
-     * 提交 NARROWCAST 任務：呼叫 LINE Narrowcast API（不自管 chunks）。
-     * 取得 X-Line-Request-Id 後存到 task.narrowcastRequestId，
-     * 由 BroadcastNarrowcastPoller 追蹤進度。
-     */
+    /** 不自管 chunks，requestId 存進 task、由 BroadcastNarrowcastPoller 輪詢進度。 */
     private BroadcastTaskDTO submitNarrowcast(BroadcastTask task) {
         List<Message> messages = parseMessages(task.getMessageContent());
         UUID retryKey = UUID.nameUUIDFromBytes(("narrowcast-" + task.getId()).getBytes());
@@ -394,9 +366,7 @@ public class BroadcastService {
         }
     }
 
-    /**
-     * 測試發送：對單一 lineUserId 用 pushMessage，不影響任務統計。
-     */
+    /** 對單一 lineUserId 用 pushMessage，不寫入 chunk、不影響任務統計。 */
     public String testSend(Long taskId, String lineUserId) {
         BroadcastTask task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("BroadcastTask", taskId));
@@ -422,10 +392,8 @@ public class BroadcastService {
     }
 
     /**
-     * 決定任務的 apiMode：
-     * - 前端有指定就以前端為主
-     * - NARROWCAST 強制設為 MULTICAST（其實這欄位對 narrowcast 不會用到）
-     * - 沒指定預設 PUSH
+     * 前端指定為主、沒指定預設 PUSH；NARROWCAST 強制設為 MULTICAST
+     * （narrowcast 實際不用這欄位，只是讓 DB 看起來一致）。
      */
     private String resolveApiMode(BroadcastCreateRequest req) {
         if ("NARROWCAST".equals(req.getTargetType())) {
@@ -507,7 +475,7 @@ public class BroadcastService {
                 if (!"ANY".equals(match) && !"ALL".equals(match)) {
                     throw new IllegalArgumentException("tagMatch 必須為 ANY 或 ALL");
                 }
-                // Phase 2 先支援 ANY；ALL（交集）改在記憶體內用 stream 處理
+                // ALL（交集）在記憶體做、不寫複雜的 native query 拖長 DB 鎖時間
                 if ("ALL".equals(match)) {
                     yield computeTagIntersection(req.getTagIds());
                 }
@@ -567,7 +535,6 @@ public class BroadcastService {
         dto.setSentCount(t.getSentCount());
         dto.setSuccessCount(t.getSuccessCount());
         dto.setFailedCount(t.getFailedCount());
-        dto.setLineDeliveredDelta(t.getLineDeliveredDelta());
         dto.setScheduledAt(t.getScheduledAt());
         dto.setStartedAt(t.getStartedAt());
         dto.setFinishedAt(t.getFinishedAt());

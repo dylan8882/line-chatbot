@@ -25,12 +25,6 @@ public class BroadcastTaskDTO {
     private Integer successCount;
     private Integer failedCount;
 
-    /**
-     * LINE 平台日送達增量（僅 multicast task）：完成 ≥ 5 分鐘後 scheduler 撈
-     * LINE delivery API 統計算出。null = 尚未結算或不適用。
-     */
-    private Long lineDeliveredDelta;
-
     private LocalDateTime scheduledAt;
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;

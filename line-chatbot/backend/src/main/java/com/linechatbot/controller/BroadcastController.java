@@ -6,6 +6,8 @@ import com.linechatbot.service.BroadcastProgressService;
 import com.linechatbot.service.BroadcastService;
 import com.linechatbot.service.BroadcastStatisticsService;
 import com.linechatbot.service.MulticastDeliveryStatsService;
+
+import java.time.LocalDate;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
@@ -124,18 +126,19 @@ public class BroadcastController {
     }
 
     /**
-     * 手動觸發 multicast 日送達結算（admin/manager 用，避免乾等 scheduler tick）。
-     * POST /api/broadcasts/multicast-delivery/reconcile
+     * 查詢指定日期的 LINE multicast 平台累計送達數（給 dashboard widget 用）。
+     * GET /api/broadcasts/multicast-delivery/daily?date=YYYY-MM-DD（省略 = 今天）
      */
-    @PostMapping("/multicast-delivery/reconcile")
-    @PreAuthorize("hasAnyRole('MANAGER', 'ADMIN')")
-    public ResponseEntity<Map<String, Object>> reconcileMulticastDelivery() {
-        MulticastDeliveryStatsService.ReconcileSummary summary =
-                multicastDeliveryStatsService.reconcileNow();
+    @GetMapping("/multicast-delivery/daily")
+    public ResponseEntity<Map<String, Object>> multicastDailyDelivery(
+            @RequestParam(required = false) String date) {
+        LocalDate d = (date == null || date.isBlank()) ? LocalDate.now() : LocalDate.parse(date);
+        MulticastDeliveryStatsService.DailyDelivery data =
+                multicastDeliveryStatsService.getDailyTotal(d);
         return ResponseEntity.ok(Map.of(
                 "success", true,
-                "data", summary,
-                "message", "已觸發 multicast 日送達結算"
+                "data", data,
+                "message", "查詢成功"
         ));
     }
 

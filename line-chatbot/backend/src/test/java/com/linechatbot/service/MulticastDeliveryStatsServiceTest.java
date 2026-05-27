@@ -1,8 +1,6 @@
 package com.linechatbot.service;
 
-import com.linechatbot.model.entity.BroadcastTask;
 import com.linechatbot.model.entity.MulticastDailyDelivery;
-import com.linechatbot.repository.BroadcastTaskRepository;
 import com.linechatbot.repository.MulticastDailyDeliveryRepository;
 import com.linecorp.bot.client.base.Result;
 import com.linecorp.bot.messaging.client.MessagingApiClient;
@@ -11,7 +9,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -33,150 +30,152 @@ import static org.mockito.Mockito.when;
 /**
  * MulticastDeliveryStatsService 單元測試。
  *
- * <p>核心情境：
+ * <p>新設計：不再做 per-task delta。service 提供 daily total 查詢（帶 5 分鐘快取）。
+ *
+ * <p>覆蓋情境：
  * <ul>
- *   <li>當日第一個 task：delta = LINE total（last_total 從 0 起算）</li>
- *   <li>當日第二個 task：delta = LINE total − 上次 last_total</li>
- *   <li>LINE API 尚未 ready（status=UNREADY/OUT_OF_SERVICE 等）→ 跳過、不寫入</li>
- *   <li>已結算過的 task 不重複處理（race condition）</li>
- *   <li>LINE total 變小（不該發生但 defensive）→ delta = 0 不是負數</li>
+ *   <li>快取命中（≤ 5 min）→ 不打 LINE，回快取</li>
+ *   <li>快取過期 → 打 LINE → READY → 更新快取</li>
+ *   <li>快取過期 → 打 LINE → UNREADY → 不寫快取，回舊快取</li>
+ *   <li>無快取 → 打 LINE → READY → 寫入</li>
+ *   <li>無快取 → 打 LINE → UNREADY → 回 null + status</li>
+ *   <li>LINE API 失敗 → 回舊快取（若有）+ status=ERROR</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
 class MulticastDeliveryStatsServiceTest {
 
-    @Mock BroadcastTaskRepository taskRepository;
     @Mock MulticastDailyDeliveryRepository dailyRepository;
     @Mock MessagingApiClient messagingApiClient;
 
     private MulticastDeliveryStatsService service;
 
+    private static final LocalDate TODAY = LocalDate.of(2026, 5, 27);
+
     @BeforeEach
     void setUp() {
-        service = new MulticastDeliveryStatsService(taskRepository, dailyRepository, messagingApiClient);
-        lenient().when(taskRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        service = new MulticastDeliveryStatsService(dailyRepository, messagingApiClient);
         lenient().when(dailyRepository.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 
     @Test
-    @DisplayName("第一個 task：delta = LINE total，新建 MulticastDailyDelivery")
-    void settleOne_firstTaskOfDay_deltaEqualsTotal() {
-        LocalDate today = LocalDate.of(2026, 5, 27);
-        BroadcastTask task = makeTask(1L, today.atTime(10, 0));
-        when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
-        when(dailyRepository.findById(today)).thenReturn(Optional.empty());
-        stubLineDeliveryReady(150L);
+    @DisplayName("快取命中（剛剛更新）→ 不打 LINE，回快取值")
+    void getDailyTotal_freshCache_returnsCached() {
+        MulticastDailyDelivery cached = MulticastDailyDelivery.builder()
+                .date(TODAY)
+                .lastTotal(123L)
+                .updatedAt(LocalDateTime.now().minusMinutes(1))
+                .build();
+        when(dailyRepository.findById(TODAY)).thenReturn(Optional.of(cached));
 
-        service.settleOne(1L);
+        MulticastDeliveryStatsService.DailyDelivery result = service.getDailyTotal(TODAY);
 
-        assertThat(task.getLineDeliveredDelta()).isEqualTo(150L);
-        ArgumentCaptor<MulticastDailyDelivery> dailyCap = ArgumentCaptor.forClass(MulticastDailyDelivery.class);
-        verify(dailyRepository).save(dailyCap.capture());
-        assertThat(dailyCap.getValue().getDate()).isEqualTo(today);
-        assertThat(dailyCap.getValue().getLastTotal()).isEqualTo(150L);
+        assertThat(result.total()).isEqualTo(123L);
+        assertThat(result.status()).isEqualTo("READY");
+        assertThat(result.fromCache()).isTrue();
+        verify(messagingApiClient, never()).getNumberOfSentMulticastMessages(anyString());
     }
 
     @Test
-    @DisplayName("第二個 task：delta = total − last_total，更新 cache")
-    void settleOne_secondTaskOfDay_deltaIsDifference() {
-        LocalDate today = LocalDate.of(2026, 5, 27);
-        BroadcastTask task = makeTask(2L, today.atTime(11, 30));
-        when(taskRepository.findById(2L)).thenReturn(Optional.of(task));
-        MulticastDailyDelivery existing = MulticastDailyDelivery.builder()
-                .date(today).lastTotal(150L).build();
-        when(dailyRepository.findById(today)).thenReturn(Optional.of(existing));
-        stubLineDeliveryReady(250L);
+    @DisplayName("無快取 → LINE READY → 寫入並回新值")
+    void getDailyTotal_noCacheLineReady_savesAndReturns() {
+        when(dailyRepository.findById(TODAY)).thenReturn(Optional.empty());
+        stubLineDelivery(NumberOfMessagesResponse.Status.READY, 500L);
 
-        service.settleOne(2L);
+        MulticastDeliveryStatsService.DailyDelivery result = service.getDailyTotal(TODAY);
 
-        assertThat(task.getLineDeliveredDelta()).isEqualTo(100L);
-        assertThat(existing.getLastTotal()).isEqualTo(250L);
-        verify(dailyRepository).save(existing);
+        assertThat(result.total()).isEqualTo(500L);
+        assertThat(result.status()).isEqualTo("READY");
+        assertThat(result.fromCache()).isFalse();
+        verify(dailyRepository).save(any());
     }
 
     @Test
-    @DisplayName("LINE API 尚未 ready：跳過、不寫入任何資料")
-    void settleOne_lineNotReady_skips() {
-        LocalDate today = LocalDate.of(2026, 5, 27);
-        BroadcastTask task = makeTask(3L, today.atTime(12, 0));
-        when(taskRepository.findById(3L)).thenReturn(Optional.of(task));
+    @DisplayName("過期快取 + LINE READY → 更新值")
+    void getDailyTotal_staleCacheLineReady_updates() {
+        MulticastDailyDelivery stale = MulticastDailyDelivery.builder()
+                .date(TODAY)
+                .lastTotal(100L)
+                .updatedAt(LocalDateTime.now().minusHours(1))
+                .build();
+        when(dailyRepository.findById(TODAY)).thenReturn(Optional.of(stale));
+        stubLineDelivery(NumberOfMessagesResponse.Status.READY, 300L);
+
+        MulticastDeliveryStatsService.DailyDelivery result = service.getDailyTotal(TODAY);
+
+        assertThat(result.total()).isEqualTo(300L);
+        assertThat(result.status()).isEqualTo("READY");
+        assertThat(result.fromCache()).isFalse();
+        assertThat(stale.getLastTotal()).isEqualTo(300L); // updated in-place
+    }
+
+    @Test
+    @DisplayName("過期快取 + LINE UNREADY → 不寫入，回舊快取值帶 UNREADY 狀態")
+    void getDailyTotal_staleCacheLineUnready_keepsCachedValueButReportsStatus() {
+        MulticastDailyDelivery stale = MulticastDailyDelivery.builder()
+                .date(TODAY)
+                .lastTotal(100L)
+                .updatedAt(LocalDateTime.now().minusHours(1))
+                .build();
+        when(dailyRepository.findById(TODAY)).thenReturn(Optional.of(stale));
         stubLineDelivery(NumberOfMessagesResponse.Status.UNREADY, null);
 
-        service.settleOne(3L);
+        MulticastDeliveryStatsService.DailyDelivery result = service.getDailyTotal(TODAY);
 
-        assertThat(task.getLineDeliveredDelta()).isNull();
-        verify(taskRepository, never()).save(any());
+        assertThat(result.total()).isEqualTo(100L); // 用舊快取值
+        assertThat(result.status()).isEqualTo("UNREADY");
+        assertThat(result.fromCache()).isTrue();
         verify(dailyRepository, never()).save(any());
     }
 
     @Test
-    @DisplayName("已結算過：直接 return 不重複處理")
-    void settleOne_alreadySettled_noop() {
-        LocalDate today = LocalDate.of(2026, 5, 27);
-        BroadcastTask task = makeTask(4L, today.atTime(12, 0));
-        task.setLineDeliveredDelta(42L);
-        when(taskRepository.findById(4L)).thenReturn(Optional.of(task));
+    @DisplayName("無快取 + LINE UNREADY → 回 null + status")
+    void getDailyTotal_noCacheLineUnready_returnsNull() {
+        when(dailyRepository.findById(TODAY)).thenReturn(Optional.empty());
+        stubLineDelivery(NumberOfMessagesResponse.Status.UNREADY, null);
 
-        service.settleOne(4L);
+        MulticastDeliveryStatsService.DailyDelivery result = service.getDailyTotal(TODAY);
 
-        verify(messagingApiClient, never()).getNumberOfSentMulticastMessages(anyString());
-        verify(taskRepository, never()).save(any());
+        assertThat(result.total()).isNull();
+        assertThat(result.status()).isEqualTo("UNREADY");
+        assertThat(result.fromCache()).isFalse();
+        verify(dailyRepository, never()).save(any());
     }
 
     @Test
-    @DisplayName("total 比 last_total 還小：delta 被夾到 0，不是負數")
-    void settleOne_totalDecreased_deltaClampedToZero() {
-        LocalDate today = LocalDate.of(2026, 5, 27);
-        BroadcastTask task = makeTask(5L, today.atTime(12, 0));
-        when(taskRepository.findById(5L)).thenReturn(Optional.of(task));
-        MulticastDailyDelivery existing = MulticastDailyDelivery.builder()
-                .date(today).lastTotal(500L).build();
-        when(dailyRepository.findById(today)).thenReturn(Optional.of(existing));
-        stubLineDeliveryReady(450L); // 比 last_total 小
-
-        service.settleOne(5L);
-
-        assertThat(task.getLineDeliveredDelta()).isEqualTo(0L);
-        assertThat(existing.getLastTotal()).isEqualTo(450L);
-    }
-
-    @Test
-    @DisplayName("LINE API 拋例外：吞掉、不寫入 task（下輪 scheduler 會重試）")
-    void settleOne_lineApiThrows_swallowsAndSkips() {
-        LocalDate today = LocalDate.of(2026, 5, 27);
-        BroadcastTask task = makeTask(6L, today.atTime(12, 0));
-        when(taskRepository.findById(6L)).thenReturn(Optional.of(task));
+    @DisplayName("LINE API 拋例外 + 有舊快取 → 回舊值 + status=ERROR")
+    void getDailyTotal_lineThrowsWithCache_returnsCachedWithErrorStatus() {
+        MulticastDailyDelivery stale = MulticastDailyDelivery.builder()
+                .date(TODAY)
+                .lastTotal(42L)
+                .updatedAt(LocalDateTime.now().minusHours(2))
+                .build();
+        when(dailyRepository.findById(TODAY)).thenReturn(Optional.of(stale));
         doReturn(CompletableFuture.failedFuture(new RuntimeException("timeout")))
                 .when(messagingApiClient).getNumberOfSentMulticastMessages(anyString());
 
-        service.settleOne(6L);
+        MulticastDeliveryStatsService.DailyDelivery result = service.getDailyTotal(TODAY);
 
-        assertThat(task.getLineDeliveredDelta()).isNull();
-        verify(taskRepository, never()).save(any());
-        verify(dailyRepository, never()).save(any());
+        assertThat(result.total()).isEqualTo(42L);
+        assertThat(result.status()).isEqualTo("ERROR");
+        assertThat(result.fromCache()).isTrue();
     }
 
-    // ── 輔助 ────────────────────────────────────────────────
+    @Test
+    @DisplayName("LINE API 拋例外 + 無快取 → 回 null + status=ERROR")
+    void getDailyTotal_lineThrowsNoCache_returnsNullError() {
+        when(dailyRepository.findById(TODAY)).thenReturn(Optional.empty());
+        doReturn(CompletableFuture.failedFuture(new RuntimeException("timeout")))
+                .when(messagingApiClient).getNumberOfSentMulticastMessages(anyString());
 
-    private BroadcastTask makeTask(Long id, LocalDateTime finishedAt) {
-        return BroadcastTask.builder()
-                .id(id)
-                .name("multicast task")
-                .targetType("ALL")
-                .messageContent("[]")
-                .apiMode("MULTICAST")
-                .status("COMPLETED")
-                .totalRecipients(100)
-                .sentCount(100)
-                .successCount(100)
-                .failedCount(0)
-                .finishedAt(finishedAt)
-                .build();
+        MulticastDeliveryStatsService.DailyDelivery result = service.getDailyTotal(TODAY);
+
+        assertThat(result.total()).isNull();
+        assertThat(result.status()).isEqualTo("ERROR");
+        assertThat(result.fromCache()).isFalse();
     }
 
-    private void stubLineDeliveryReady(long total) {
-        stubLineDelivery(NumberOfMessagesResponse.Status.READY, total);
-    }
+    // ── 輔助 ─────────────────────────────────────────────
 
     private void stubLineDelivery(NumberOfMessagesResponse.Status status, Long total) {
         NumberOfMessagesResponse body = new NumberOfMessagesResponse(status, total);

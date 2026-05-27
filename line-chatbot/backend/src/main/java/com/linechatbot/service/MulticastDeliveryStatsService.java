@@ -1,15 +1,12 @@
 package com.linechatbot.service;
 
-import com.linechatbot.model.entity.BroadcastTask;
 import com.linechatbot.model.entity.MulticastDailyDelivery;
-import com.linechatbot.repository.BroadcastTaskRepository;
 import com.linechatbot.repository.MulticastDailyDeliveryRepository;
 import com.linecorp.bot.client.base.Result;
 import com.linecorp.bot.messaging.client.MessagingApiClient;
 import com.linecorp.bot.messaging.model.NumberOfMessagesResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,98 +14,46 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
+import java.util.Optional;
 
 /**
- * Multicast 任務的「LINE 平台日送達增量」結算服務。
+ * 查 LINE 平台「當日 multicast 累計送達數」。
  *
- * <p>背景：multicast 發送後 LINE 不會回 per-user 結果，只能透過
- * {@code GET /v2/bot/message/delivery/multicast?date=YYYYMMDD} 拿到「當日累計送達數」。
- * 把這個累計拆分成 per-task 的增量，需要：
+ * <p><b>為什麼不做 per-task delta？</b>
+ * LINE 對此端點的統計通常要等到次日才 READY（一天延遲），而當 scheduler 第二天
+ * 拉到資料時，同日所有 multicast task 都已經完成 → 第一個被結算的會吃光當日總數、
+ * 後續 task 拿到 0，無法精準歸因。故改成「儀表板層級顯示當日總數」，
+ * 不假裝每個 task 都有自己的 delivered 數。
  *
- * <ol>
- *   <li>記錄上次查詢的 total（{@code multicast_daily_delivery.last_total}）</li>
- *   <li>本次任務的 delta = LINE 回的 total − last_total</li>
- *   <li>把 last_total 更新成新 total，給同日下一個任務參考</li>
- * </ol>
- *
- * <p>限制：LINE API 約 5–10 分鐘延遲，所以 task 完成 5 分鐘內不會結算；
- * 又因為當日 total 涵蓋所有 multicast 任務（包含本系統外的呼叫），
- * delta 是「估算值」而非精準歸因，UI 需要在 tooltip 說明清楚。
+ * <p>{@code multicast_daily_delivery} 表保留作為快取：
+ * 同一天頻繁查詢時 5 分鐘內走快取，避免打爆 LINE API。
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class MulticastDeliveryStatsService {
 
-    /** LINE delivery API 預期需要的延遲 buffer */
-    private static final Duration DELIVERY_LAG = Duration.ofMinutes(5);
-
     private static final DateTimeFormatter LINE_DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
 
-    private final BroadcastTaskRepository taskRepository;
+    /** 快取存活時間：當日資料 5 分鐘內走快取（過去日期已 READY 後實質永久有效） */
+    private static final Duration CACHE_TTL = Duration.ofMinutes(5);
+
     private final MulticastDailyDeliveryRepository dailyRepository;
     private final MessagingApiClient messagingApiClient;
 
     /**
-     * 排程入口：每 5 分鐘掃一次。
-     * 用 fixedDelay 避免上一輪還沒跑完就重疊（LINE API 偶爾會慢）。
-     */
-    @Scheduled(fixedDelayString = "${broadcast.multicast-delivery.poll-ms:300000}")
-    public void reconcile() {
-        reconcileNow();
-    }
-
-    /**
-     * 手動觸發版本：回傳結算結果摘要（給 admin 端點呼叫）。
-     */
-    public ReconcileSummary reconcileNow() {
-        LocalDateTime before = LocalDateTime.now().minus(DELIVERY_LAG);
-        List<BroadcastTask> pending = taskRepository.findMulticastPendingDeliveryStats(before);
-        if (pending.isEmpty()) {
-            log.info("Multicast delivery 結算：無待處理任務（含已完成 ≥ {} 分鐘的 multicast）",
-                    DELIVERY_LAG.toMinutes());
-            return new ReconcileSummary(0, 0, 0, 0);
-        }
-
-        log.info("Multicast delivery 結算：掃到 {} 個待處理任務", pending.size());
-        int settled = 0;
-        int notReady = 0;
-        int errors = 0;
-        for (BroadcastTask task : pending) {
-            try {
-                SettleResult r = settleOne(task.getId());
-                switch (r) {
-                    case SETTLED -> settled++;
-                    case NOT_READY -> notReady++;
-                    case ALREADY_SETTLED, SKIPPED -> { /* no-op for summary */ }
-                }
-            } catch (Exception e) {
-                errors++;
-                log.warn("Multicast delivery 結算失敗：taskId={}, error={}",
-                        task.getId(), e.getMessage());
-            }
-        }
-        log.info("Multicast delivery 結算結束：scanned={}, settled={}, notReady={}, errors={}",
-                pending.size(), settled, notReady, errors);
-        return new ReconcileSummary(pending.size(), settled, notReady, errors);
-    }
-
-    /**
-     * 結算單一任務：撈 LINE 當日 total → 算 delta → 寫回 task + 更新 last_total。
-     * 獨立 transaction，避免單一任務失敗影響其他任務。
+     * 走快取優先：cache 命中且未過期直接回；否則打 LINE API、僅 status=READY 才寫回快取
+     * （未 ready 的 response 不寫，避免把 stale UNREADY 鎖在快取裡）。
      */
     @Transactional
-    public SettleResult settleOne(Long taskId) {
-        BroadcastTask task = taskRepository.findById(taskId).orElse(null);
-        if (task == null) return SettleResult.SKIPPED;
-        // race condition 防禦：可能上一輪同時跑、已寫入
-        if (task.getLineDeliveredDelta() != null) return SettleResult.ALREADY_SETTLED;
-        if (task.getFinishedAt() == null) return SettleResult.SKIPPED;
+    public DailyDelivery getDailyTotal(LocalDate date) {
+        Optional<MulticastDailyDelivery> cached = dailyRepository.findById(date);
+        if (cached.isPresent() && !isStale(cached.get())) {
+            MulticastDailyDelivery c = cached.get();
+            return new DailyDelivery(date, c.getLastTotal(), "READY", c.getUpdatedAt(), true);
+        }
 
-        LocalDate date = task.getFinishedAt().toLocalDate();
         String lineDate = date.format(LINE_DATE_FMT);
-
         NumberOfMessagesResponse resp;
         try {
             Result<NumberOfMessagesResponse> result = messagingApiClient
@@ -116,48 +61,52 @@ public class MulticastDeliveryStatsService {
                     .get();
             resp = result.body();
         } catch (Exception e) {
-            log.warn("查詢 LINE multicast delivery 失敗：taskId={}, date={}, error={}",
-                    taskId, lineDate, e.getMessage());
-            return SettleResult.NOT_READY;
+            log.warn("查詢 LINE multicast delivery 失敗：date={}, error={}", lineDate, e.getMessage());
+            // 失敗時回快取舊值（若有），讓前端至少有資料展示
+            return cached
+                    .map(c -> new DailyDelivery(date, c.getLastTotal(), "ERROR", c.getUpdatedAt(), true))
+                    .orElse(new DailyDelivery(date, null, "ERROR", null, false));
         }
 
         if (resp == null || resp.status() != NumberOfMessagesResponse.Status.READY) {
-            log.info("LINE delivery 尚未 ready：taskId={}, date={}, status={}（下輪 scheduler 會重試）",
-                    taskId, lineDate, resp == null ? "null" : resp.status());
-            return SettleResult.NOT_READY;
+            String status = resp == null ? "ERROR" : resp.status().name();
+            log.info("LINE delivery 尚未 ready：date={}, status={}", lineDate, status);
+            return cached
+                    .map(c -> new DailyDelivery(date, c.getLastTotal(), status, c.getUpdatedAt(), true))
+                    .orElse(new DailyDelivery(date, null, status, null, false));
         }
 
         long total = resp.success() == null ? 0L : resp.success();
-        MulticastDailyDelivery daily = dailyRepository.findById(date)
-                .orElseGet(() -> MulticastDailyDelivery.builder()
-                        .date(date)
-                        .lastTotal(0L)
-                        .build());
-
-        long delta = Math.max(0L, total - daily.getLastTotal());
-        task.setLineDeliveredDelta(delta);
-        taskRepository.save(task);
-
-        daily.setLastTotal(total);
-        dailyRepository.save(daily);
-
-        log.info("Multicast delivery 結算完成：taskId={}, date={}, total={}, delta={}",
-                taskId, lineDate, total, delta);
-        return SettleResult.SETTLED;
+        MulticastDailyDelivery entity = cached.orElseGet(() -> MulticastDailyDelivery.builder()
+                .date(date)
+                .lastTotal(0L)
+                .build());
+        entity.setLastTotal(total);
+        MulticastDailyDelivery saved = dailyRepository.save(entity);
+        log.info("LINE delivery 已更新：date={}, total={}", lineDate, total);
+        return new DailyDelivery(date, total, "READY", saved.getUpdatedAt(), false);
     }
 
-    /** settleOne 的分支結果 */
-    public enum SettleResult {
-        /** 成功寫入 delta */
-        SETTLED,
-        /** LINE 還沒 ready / API 失敗，下輪 scheduler 會重試 */
-        NOT_READY,
-        /** 已結算過，本輪略過 */
-        ALREADY_SETTLED,
-        /** 任務不存在或 finishedAt 為空 */
-        SKIPPED
+    private boolean isStale(MulticastDailyDelivery entity) {
+        return entity.getUpdatedAt() == null
+                || entity.getUpdatedAt().isBefore(LocalDateTime.now().minus(CACHE_TTL));
     }
 
-    /** 手動結算的回傳摘要 */
-    public record ReconcileSummary(int scanned, int settled, int notReady, int errors) {}
+    /**
+     * 查詢結果 DTO。
+     *
+     * @param date       查詢日期
+     * @param total      LINE 回的當日累計送達數（READY 時有值；UNREADY 且無歷史快取時為 null）
+     * @param status     LINE 統計狀態：READY / UNREADY / UNAVAILABLE_FOR_PRIVACY / OUT_OF_SERVICE
+     *                   / UNDEFINED / ERROR（網路或解析失敗）
+     * @param asOf       本筆資料的時間戳（從快取或本次更新）
+     * @param fromCache  是否來自快取（false = 本次剛打 LINE 拿到）
+     */
+    public record DailyDelivery(
+            LocalDate date,
+            Long total,
+            String status,
+            LocalDateTime asOf,
+            boolean fromCache
+    ) {}
 }
