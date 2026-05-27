@@ -41,6 +41,15 @@ public class BroadcastStatisticsService {
 
     /**
      * 任務成效摘要。
+     *
+     * <p>PUSH 與 MULTICAST 的計算方式不同：
+     * <ul>
+     *   <li>PUSH：deliveredRecipients / successRate / sendRatePerSecond 用 task 的
+     *       per-user 計數（task.successCount / failedCount，由 BroadcastCounterService 累計），
+     *       因為 PUSH chunk 可能是 PARTIAL（部分使用者 4xx），不能拿整 chunk 當成功</li>
+     *   <li>MULTICAST：用 chunk-level 計算（每個 SUCCESS chunk 算 N 人送達），
+     *       因為 LINE 不會回 per-user 結果</li>
+     * </ul>
      */
     public BroadcastStatisticsDTO getStatistics(Long taskId) {
         BroadcastTask task = taskRepository.findById(taskId)
@@ -48,7 +57,7 @@ public class BroadcastStatisticsService {
         List<BroadcastChunk> chunks = chunkRepository.findByTaskIdOrderByChunkIndex(taskId);
 
         int successChunks = 0, failedChunks = 0, retryingChunks = 0, pendingChunks = 0;
-        int delivered = 0;
+        int chunkDelivered = 0;
         long attemptsSum = 0;
         Map<String, Integer> errorBreakdown = new HashMap<>();
 
@@ -57,7 +66,13 @@ public class BroadcastStatisticsService {
             switch (c.getStatus()) {
                 case "SUCCESS" -> {
                     successChunks++;
-                    delivered += parseRecipientCount(c);
+                    chunkDelivered += parseRecipientCount(c);
+                }
+                case "PARTIAL" -> {
+                    // PUSH 模式部分使用者 4xx；chunk 整體當完成，不重試
+                    successChunks++;
+                    String code = c.getErrorCode() != null ? c.getErrorCode() : "PARTIAL_FAILURES";
+                    errorBreakdown.merge(code, 1, Integer::sum);
                 }
                 case "FAILED" -> {
                     failedChunks++;
@@ -71,8 +86,23 @@ public class BroadcastStatisticsService {
         }
 
         int totalChunks = chunks.size();
-        double successRate = totalChunks == 0 ? 0
-                : (successChunks * 1.0) / Math.max(1, successChunks + failedChunks);
+        boolean isPush = "PUSH".equals(task.getApiMode());
+        int taskSuccess = task.getSuccessCount() == null ? 0 : task.getSuccessCount();
+        int taskFailed = task.getFailedCount() == null ? 0 : task.getFailedCount();
+
+        int delivered;
+        double successRate;
+        if (isPush) {
+            // Push 模式：用 task 的 per-user 累計
+            delivered = taskSuccess;
+            int denom = taskSuccess + taskFailed;
+            successRate = denom == 0 ? 0 : (taskSuccess * 1.0) / denom;
+        } else {
+            // Multicast / Narrowcast：用 chunk-level 計算
+            delivered = chunkDelivered;
+            int denom = successChunks + failedChunks;
+            successRate = denom == 0 ? 0 : (successChunks * 1.0) / denom;
+        }
         double avgAttempts = totalChunks == 0 ? 0 : (attemptsSum * 1.0) / totalChunks;
 
         Long durationMs = null;
@@ -82,7 +112,9 @@ public class BroadcastStatisticsService {
         if (started != null) {
             durationMs = Duration.between(started, endRef).toMillis();
             if (durationMs > 0) {
-                sendRatePerSec = (delivered * 1000.0) / durationMs;
+                // Push 用「已處理人數」當分子（成功 + 失敗），multicast 用 delivered chunk 加總
+                int rateNumerator = isPush ? (taskSuccess + taskFailed) : delivered;
+                sendRatePerSec = (rateNumerator * 1000.0) / durationMs;
             }
         }
 

@@ -66,6 +66,35 @@ export const createAbTest = (data: AbTestCreateRequest) =>
 export const getAbTestComparison = (abTestId: string) =>
   client.get<ApiResponse<AbTestComparison>>(`/broadcasts/ab-test/${abTestId}`)
 
+/** LINE multicast 平台每日累計送達數狀態 */
+export type MulticastDeliveryStatus =
+  | 'READY'
+  | 'UNREADY'
+  | 'UNAVAILABLE_FOR_PRIVACY'
+  | 'OUT_OF_SERVICE'
+  | 'UNDEFINED'
+  | 'ERROR'
+
+export interface MulticastDailyDelivery {
+  /** ISO date YYYY-MM-DD */
+  date: string
+  /** READY 時為 LINE 回的累計送達數；UNREADY 等無歷史快取時為 null */
+  total: number | null
+  status: MulticastDeliveryStatus
+  /** 本筆資料時間戳（從快取或本次更新） */
+  asOf: string | null
+  /** true = 來自快取，false = 本次剛打 LINE 拿到 */
+  fromCache: boolean
+}
+
+/** 查詢指定日期（省略 = 今天）的 LINE multicast 平台累計送達數 */
+export const getMulticastDailyDelivery = (date?: string) => {
+  const url = date
+    ? `/broadcasts/multicast-delivery/daily?date=${encodeURIComponent(date)}`
+    : '/broadcasts/multicast-delivery/daily'
+  return client.get<ApiResponse<MulticastDailyDelivery>>(url)
+}
+
 /**
  * 建立 SSE 進度連線。EventSource 不支援自訂 Header，所以 JWT 用 query string。
  * 後端 JwtAuthenticationFilter 對 Accept: text/event-stream 的請求會接受 ?token=。

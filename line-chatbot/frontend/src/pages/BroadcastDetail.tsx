@@ -276,16 +276,29 @@ export default function BroadcastDetail() {
               : 'active'
           }
         />
-        <Space size="large" style={{ marginTop: 12 }}>
-          <span>收件人：{task.totalRecipients}</span>
-          <span>已送：{task.sentCount}</span>
-          <span style={{ color: '#52c41a' }}>成功：{task.successCount}</span>
-          <span style={{ color: '#ff4d4f' }}>失敗：{task.failedCount}</span>
-        </Space>
+        {task.targetType === 'NARROWCAST' ? (
+          <div style={{ marginTop: 12, color: '#888' }}>
+            由 LINE Narrowcast 平台自管分發（X-Line-Request-Id 追蹤）
+          </div>
+        ) : task.apiMode === 'PUSH' ? (
+          <Space size="large" style={{ marginTop: 12 }}>
+            <span>收件人：{task.totalRecipients}</span>
+            <span>已送：{task.sentCount}</span>
+            <span style={{ color: '#52c41a' }}>成功：{task.successCount}</span>
+            <span style={{ color: '#ff4d4f' }}>失敗：{task.failedCount}</span>
+          </Space>
+        ) : (
+          <div style={{ marginTop: 12, color: '#666' }}>
+            Multicast：{STATUS_LABEL[task.status]}
+            <span style={{ marginLeft: 12, fontSize: 12, color: '#999' }}>
+              （LINE 不提供 per-user 結果，實際送達請查看 Dashboard「今日 LINE multicast 累計送達」）
+            </span>
+          </div>
+        )}
       </Card>
 
       <div style={{ marginBottom: 16 }}>
-        <StatisticsPanel stats={stats} loading={loading} />
+        <StatisticsPanel stats={stats} task={task} loading={loading} />
       </div>
 
       <div style={{ marginBottom: 16 }}>
@@ -324,7 +337,7 @@ export default function BroadcastDetail() {
         </pre>
       </Card>
 
-      <Card title={`分片 (${task.chunks?.length ?? 0})`} size="small">
+      <Card title={`批次 (${task.chunks?.length ?? 0})`} size="small">
         <Table
           rowKey="id"
           columns={chunkColumns}

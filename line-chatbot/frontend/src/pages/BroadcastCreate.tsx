@@ -251,7 +251,7 @@ export default function BroadcastCreate() {
               type="info"
               showIcon
               message="Narrowcast 模式："
-              description="走 LINE 官方大規模分發 API，由 LINE 平台自管 audience。適合 >100K 用戶；不需自管 chunks，但無 per-user 成敗追蹤（僅彙總統計）。Phase 6 預設推送給全部已加好友。"
+              description="走 LINE 官方大規模分發 API，由 LINE 平台自管 audience。適合 >100K 用戶；不需自管批次，但無 per-user 成敗追蹤（僅彙總統計）。Phase 6 預設推送給全部已加好友。"
               style={{ marginBottom: 8 }}
             />
           )}
@@ -321,7 +321,7 @@ export default function BroadcastCreate() {
             {estimate && (
               <>
                 <Statistic title="收件人數" value={estimate.total} />
-                <Statistic title="分片數（500/批）" value={estimate.chunks} />
+                <Statistic title="批次數（500 人/批）" value={estimate.chunks} />
               </>
             )}
           </Space>

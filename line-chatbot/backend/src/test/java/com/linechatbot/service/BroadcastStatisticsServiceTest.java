@@ -133,6 +133,43 @@ class BroadcastStatisticsServiceTest {
                 .isInstanceOf(ResourceNotFoundException.class);
     }
 
+    // ── PUSH 模式：per-user 計算 ──────────────────────────────
+
+    @Test
+    @DisplayName("getStatistics PUSH：deliveredRecipients/successRate 用 task per-user 計數")
+    void getStatistics_push_usesPerUserCounters() {
+        BroadcastTask task = baseTask(1L, "COMPLETED");
+        task.setApiMode("PUSH");
+        task.setTotalRecipients(10);
+        task.setSentCount(10);
+        task.setSuccessCount(8);  // 8 人成功
+        task.setFailedCount(2);   // 2 人 4xx 失敗
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
+        // 1 個 PARTIAL chunk（含 8 成 2 敗），chunk-level 算法會被忽略
+        when(chunkRepository.findByTaskIdOrderByChunkIndex(1L)).thenReturn(List.of(
+                chunkOf(1, "PARTIAL", 1, "[\"U1\",\"U2\",\"U3\",\"U4\",\"U5\",\"U6\",\"U7\",\"U8\",\"U9\",\"U10\"]")
+        ));
+
+        BroadcastStatisticsDTO stat = service.getStatistics(1L);
+
+        assertThat(stat.getDeliveredRecipients()).isEqualTo(8);
+        assertThat(stat.getSuccessRate()).isEqualTo(0.8);
+    }
+
+    @Test
+    @DisplayName("getStatistics PUSH：成功+失敗皆 0 時 successRate=0 不除以零")
+    void getStatistics_push_zeroCounters_noDivByZero() {
+        BroadcastTask task = baseTask(1L, "DRAFT");
+        task.setApiMode("PUSH");
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
+        when(chunkRepository.findByTaskIdOrderByChunkIndex(1L)).thenReturn(List.of());
+
+        BroadcastStatisticsDTO stat = service.getStatistics(1L);
+
+        assertThat(stat.getSuccessRate()).isZero();
+        assertThat(stat.getDeliveredRecipients()).isZero();
+    }
+
     // ── Phase 7 click stats ─────────────────────────────────────
 
     @Test
@@ -174,11 +211,13 @@ class BroadcastStatisticsServiceTest {
     // ── helpers ─────────────────────────────────────────────────
 
     private BroadcastTask baseTask(Long id, String status) {
+        // 預設 MULTICAST 讓既有測試走 chunk-level 計算；PUSH 測試需自行 override
         return BroadcastTask.builder()
                 .id(id)
                 .name("t-" + id)
                 .messageContent("[]")
                 .targetType("ALL")
+                .apiMode("MULTICAST")
                 .status(status)
                 .totalRecipients(0)
                 .sentCount(0)

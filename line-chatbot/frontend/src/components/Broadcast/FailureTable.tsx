@@ -1,5 +1,5 @@
 /**
- * 推播失敗 / 重試中 chunk 清單
+ * 推播失敗 / 重試中批次（chunk）清單
  */
 import { Card, Empty, Table, Tag } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -23,13 +23,13 @@ export default function FailureTable({ failures, loading }: Props) {
   if (!loading && failures.length === 0) {
     return (
       <Card title="失敗清單" size="small">
-        <Empty description="目前沒有失敗或重試中的 chunk" />
+        <Empty description="目前沒有失敗或重試中的批次" />
       </Card>
     )
   }
 
   const columns: ColumnsType<BroadcastFailure> = [
-    { title: 'Chunk #', dataIndex: 'chunkIndex', width: 80 },
+    { title: '批次 #', dataIndex: 'chunkIndex', width: 80 },
     { title: '收件人數', dataIndex: 'recipientCount', width: 90, align: 'right' },
     {
       title: '狀態',
