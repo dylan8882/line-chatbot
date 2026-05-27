@@ -16,6 +16,8 @@ public class BroadcastTaskDTO {
     private String messageContent;
     private String targetType;
     private String targetFilter;
+    /** LINE API 模式：PUSH（逐一精準）/ MULTICAST（批量、僅整批回報） */
+    private String apiMode;
     private String status;
 
     private Integer totalRecipients;

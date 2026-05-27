@@ -48,6 +48,14 @@ public class BroadcastTask {
     private String targetFilter;
 
     /**
+     * LINE API 模式：PUSH（逐一發送，可取 per-user 結果）/ MULTICAST（批量發送，僅整批回報）。
+     * 預設 PUSH；NARROWCAST target 不使用本欄位。
+     */
+    @Column(name = "api_mode", nullable = false, length = 20)
+    @Builder.Default
+    private String apiMode = "PUSH";
+
+    /**
      * DRAFT / QUEUED / RUNNING / PAUSED / COMPLETED / FAILED / CANCELLED
      */
     @Column(nullable = false, length = 20)

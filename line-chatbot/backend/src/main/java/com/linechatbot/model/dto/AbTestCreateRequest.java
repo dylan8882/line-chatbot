@@ -31,6 +31,9 @@ public class AbTestCreateRequest {
     private String tagMatch;
     private List<Long> userIds;
 
+    /** LINE API 模式：PUSH（精準逐一）/ MULTICAST（批量），null = 後端預設 PUSH */
+    private String apiMode;
+
     private LocalDateTime scheduledAt;
     private String idempotencyKey;
 

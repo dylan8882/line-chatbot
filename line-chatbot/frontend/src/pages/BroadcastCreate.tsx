@@ -47,6 +47,7 @@ interface FormValues {
   targetType: BroadcastTargetType
   tagIds?: number[]
   tagMatch?: TagMatch
+  apiMode: 'PUSH' | 'MULTICAST'
   scheduledAt?: Dayjs | null
 }
 
@@ -65,7 +66,7 @@ export default function BroadcastCreate() {
   useEffect(() => {
     getMessageTemplates().then((r) => setTemplates(r.data.data)).catch(() => {})
     getTags().then((r) => setTags(r.data.data)).catch(() => {})
-    form.setFieldsValue({ messageSource: 'TEMPLATE', targetType: 'ALL', tagMatch: 'ANY' })
+    form.setFieldsValue({ messageSource: 'TEMPLATE', targetType: 'ALL', tagMatch: 'ANY', apiMode: 'PUSH' })
   }, [form])
 
   /** 將表單值轉為後端 CreateRequest */
@@ -76,6 +77,8 @@ export default function BroadcastCreate() {
     targetType: values.targetType,
     tagIds: values.targetType === 'TAGS' ? values.tagIds : undefined,
     tagMatch: values.targetType === 'TAGS' ? values.tagMatch ?? 'ANY' : undefined,
+    // NARROWCAST 不用 apiMode（後端強制忽略）
+    apiMode: values.targetType === 'NARROWCAST' ? undefined : (values.apiMode ?? 'PUSH'),
     scheduledAt: values.scheduledAt ? values.scheduledAt.toISOString() : undefined,
   })
 
@@ -278,6 +281,19 @@ export default function BroadcastCreate() {
               message="USER_LIST 模式：請先到「LINE 用戶」頁面選取用戶後再使用（Phase 2 暫時透過 API 直接呼叫）。"
               style={{ marginBottom: 8 }}
             />
+          )}
+
+          {targetType !== 'NARROWCAST' && (
+            <Form.Item
+              name="apiMode"
+              label="LINE API 模式"
+              tooltip="Push：逐一發送、能取得 per-user 成敗（200/4xx），預設值。Multicast：批量發送（500 人/批）、LINE 僅回整批 200，無 per-user 結果。"
+            >
+              <Radio.Group>
+                <Radio.Button value="PUSH">Push API（精準）</Radio.Button>
+                <Radio.Button value="MULTICAST">Multicast API（批量）</Radio.Button>
+              </Radio.Group>
+            </Form.Item>
           )}
         </Card>
 

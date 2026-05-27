@@ -215,6 +215,9 @@ export interface MessageTemplateInput {
 /** 推播目標類型 */
 export type BroadcastTargetType = 'ALL' | 'TAGS' | 'USER_LIST' | 'NARROWCAST'
 
+/** LINE API 模式：PUSH 逐一精準（可取 per-user 結果）/ MULTICAST 批量（僅整批回報）*/
+export type BroadcastApiMode = 'PUSH' | 'MULTICAST'
+
 /** 多標籤匹配方式 */
 export type TagMatch = 'ANY' | 'ALL'
 
@@ -257,6 +260,7 @@ export interface BroadcastTask {
   messageContent: string
   targetType: BroadcastTargetType
   targetFilter: string | null
+  apiMode: BroadcastApiMode
   status: BroadcastStatus
   totalRecipients: number
   sentCount: number
@@ -283,6 +287,7 @@ export interface BroadcastCreateRequest {
   tagIds?: number[]
   tagMatch?: TagMatch
   userIds?: number[]
+  apiMode?: BroadcastApiMode
   scheduledAt?: string | null
   idempotencyKey?: string
 }
@@ -340,6 +345,7 @@ export interface AbTestCreateRequest {
   tagIds?: number[]
   tagMatch?: TagMatch
   userIds?: number[]
+  apiMode?: BroadcastApiMode
   scheduledAt?: string | null
   idempotencyKey?: string
 }

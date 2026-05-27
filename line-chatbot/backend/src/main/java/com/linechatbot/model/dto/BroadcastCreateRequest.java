@@ -35,6 +35,9 @@ public class BroadcastCreateRequest {
     /** 當 targetType = USER_LIST 時使用（後台直接指定 LineUser ID） */
     private List<Long> userIds;
 
+    /** LINE API 模式：PUSH（逐一精準）/ MULTICAST（批量、僅整批回報），null = 後端依規則決定，預設 PUSH */
+    private String apiMode;
+
     /** 排程時間，null = 立即執行 */
     private LocalDateTime scheduledAt;
 

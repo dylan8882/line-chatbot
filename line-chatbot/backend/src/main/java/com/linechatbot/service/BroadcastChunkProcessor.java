@@ -12,6 +12,7 @@ import com.linecorp.bot.client.base.Result;
 import com.linecorp.bot.messaging.client.MessagingApiClient;
 import com.linecorp.bot.messaging.model.Message;
 import com.linecorp.bot.messaging.model.MulticastRequest;
+import com.linecorp.bot.messaging.model.PushMessageRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -69,20 +70,33 @@ public class BroadcastChunkProcessor {
             return false;
         }
 
-        // 取得 multicast token（最多等 30 秒）
-        if (!rateLimiter.acquireMulticast(30_000)) {
-            log.warn("rate limit acquire timeout，重新排程 chunk：chunkId={}", chunkId);
+        boolean isPush = "PUSH".equals(task.getApiMode());
+
+        // 依模式取對應 token（最多等 30 秒）
+        boolean acquired = isPush
+                ? rateLimiter.acquirePush(30_000)
+                : rateLimiter.acquireMulticast(30_000);
+        if (!acquired) {
+            log.warn("rate limit acquire timeout，重新排程 chunk：chunkId={}, mode={}",
+                    chunkId, task.getApiMode());
             scheduleRetry(chunk, /*incrementAttempt*/ false, "rate-limit-timeout");
             return true;
         }
 
-        send(chunk, task);
+        if (isPush) {
+            sendViaPush(chunk, task);
+        } else {
+            sendViaMulticast(chunk, task);
+        }
         return true;
     }
 
     // ── 私有 ──────────────────────────────────────────────────
 
-    private void send(BroadcastChunk chunk, BroadcastTask task) {
+    /**
+     * Multicast 模式：一次 API call 送整個 chunk（≤500 人），LINE 回 200 = 整批當成功。
+     */
+    private void sendViaMulticast(BroadcastChunk chunk, BroadcastTask task) {
         chunk.setStatus("SENDING");
         chunk.setAttempts(chunk.getAttempts() + 1);
         chunk.setLastAttemptAt(LocalDateTime.now());
@@ -109,12 +123,118 @@ public class BroadcastChunkProcessor {
                     task.getId(), recipients.size(), recipients.size(), 0);
             if (isLast) counterService.finalizeTask(task.getId());
 
-            log.info("Chunk 發送成功：chunkId={}, taskId={}, recipients={}, requestId={}",
+            log.info("Chunk multicast 成功：chunkId={}, taskId={}, recipients={}, requestId={}",
                     chunk.getId(), task.getId(), recipients.size(), result.requestId());
 
         } catch (Exception e) {
             handleFailure(chunk, recipients.size(), task.getId(), e);
         }
+    }
+
+    /**
+     * Push 模式：迭代 recipients，逐一 push。每人取自己的 retry key + per-user rate token。
+     * <p>4xx（已退追、無效 ID 等）直接視為個別 user 失敗、不重試；其他 exception 走 chunk 重試流程。
+     */
+    private void sendViaPush(BroadcastChunk chunk, BroadcastTask task) {
+        chunk.setStatus("SENDING");
+        chunk.setAttempts(chunk.getAttempts() + 1);
+        chunk.setLastAttemptAt(LocalDateTime.now());
+        chunkRepository.save(chunk);
+
+        List<Message> messages = parseMessages(task.getMessageContent());
+        List<String> recipients = parseRecipientIds(chunk.getRecipientIds());
+
+        int success = 0;
+        int failed = 0;
+        String lastRequestId = null;
+        Exception lastFatal = null;
+
+        for (int i = 0; i < recipients.size(); i++) {
+            String userId = recipients.get(i);
+            // 第一個 token 進入 chunk 時已取，後面每筆都要再取
+            if (i > 0 && !rateLimiter.acquirePush(30_000)) {
+                lastFatal = new IllegalStateException("push rate limit acquire timeout mid-chunk");
+                break;
+            }
+            UUID perUserKey = derivePushRetryKey(chunk, userId);
+            try {
+                Result<?> result = messagingApiClient
+                        .pushMessage(perUserKey, new PushMessageRequest(userId, messages, false, null))
+                        .get();
+                success++;
+                lastRequestId = result.requestId();
+            } catch (Exception e) {
+                if (isClient4xx(e)) {
+                    failed++;
+                    log.debug("Push 4xx，標記個別 user failed：chunkId={}, userId={}, err={}",
+                            chunk.getId(), maskUser(userId), e.getMessage());
+                } else {
+                    // 視為 chunk 級錯誤，留 lastFatal 走 handleFailure
+                    lastFatal = e;
+                    break;
+                }
+            }
+        }
+
+        // 若中途 fatal，把已成功的計上去再走 retry/fail 流程
+        if (lastFatal != null) {
+            // 先把已 push 成功的部分計數，避免重試造成重複（依賴 LINE retry key 去重，但計數要對）
+            if (success > 0) {
+                counterService.recordChunkResult(task.getId(), success, success, 0);
+                // 注意：不執行 finalize，等 chunk 真的終結再判
+            }
+            handleFailure(chunk, recipients.size() - success - failed, task.getId(), lastFatal);
+            return;
+        }
+
+        // 全跑完（沒 fatal）
+        chunk.setStatus(failed == 0 ? "SUCCESS" : "PARTIAL");
+        chunk.setLineRequestId(lastRequestId);
+        chunk.setSentAt(LocalDateTime.now());
+        chunk.setErrorCode(failed > 0 ? "PARTIAL_FAILURES" : null);
+        chunk.setErrorMessage(failed > 0 ? failed + " 個 user push 失敗（4xx）" : null);
+        chunk.setNextRetryAt(null);
+        chunkRepository.save(chunk);
+
+        boolean isLast = counterService.recordChunkResult(
+                task.getId(), recipients.size(), success, failed);
+        if (isLast) counterService.finalizeTask(task.getId());
+
+        log.info("Chunk push 完成：chunkId={}, taskId={}, success={}, failed={}",
+                chunk.getId(), task.getId(), success, failed);
+    }
+
+    /**
+     * 判定 exception 是否為 LINE 回 4xx 的「永久性錯誤」（不重試）。
+     * 簡化判斷：訊息中含 4xx 數字或常見關鍵字。
+     */
+    private boolean isClient4xx(Exception e) {
+        Throwable t = e;
+        while (t != null) {
+            String msg = t.getMessage();
+            if (msg != null) {
+                String low = msg.toLowerCase();
+                if (low.contains(" 400 ") || low.contains(" 401 ") || low.contains(" 403 ")
+                        || low.contains(" 404 ") || low.contains(" 409 ") || low.contains(" 410 ")
+                        || low.contains("the user hasn't added the line official account")
+                        || low.contains("invalid line userid")
+                        || low.contains("user id is invalid")) {
+                    return true;
+                }
+            }
+            t = t.getCause();
+        }
+        return false;
+    }
+
+    private String maskUser(String userId) {
+        if (userId == null || userId.length() < 8) return userId;
+        return userId.substring(0, 4) + "***" + userId.substring(userId.length() - 4);
+    }
+
+    private UUID derivePushRetryKey(BroadcastChunk chunk, String userId) {
+        String seed = "broadcast-" + chunk.getId() + "-" + chunk.getAttempts() + "-" + userId;
+        return UUID.nameUUIDFromBytes(seed.getBytes());
     }
 
     private void handleFailure(BroadcastChunk chunk, int recipientCount, Long taskId, Exception e) {

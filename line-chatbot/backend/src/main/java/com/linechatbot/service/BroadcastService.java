@@ -123,6 +123,7 @@ public class BroadcastService {
                 .messageContent(messageContent)
                 .targetType(req.getTargetType())
                 .targetFilter(serializeTargetFilter(req))
+                .apiMode(resolveApiMode(req))
                 .scheduledAt(req.getScheduledAt())
                 .idempotencyKey(req.getIdempotencyKey())
                 .status(initialStatus)
@@ -311,6 +312,7 @@ public class BroadcastService {
             variantReq.setMessageContent(v.getMessageContent());
             variantReq.setTargetType("USER_LIST");
             variantReq.setUserIds(sliceUserIds);
+            variantReq.setApiMode(req.getApiMode());
             variantReq.setScheduledAt(req.getScheduledAt());
             variantReq.setIdempotencyKey(req.getIdempotencyKey() == null
                     ? null : req.getIdempotencyKey() + "-" + v.getLabel());
@@ -417,6 +419,26 @@ public class BroadcastService {
         if (!ALLOWED_TARGET_TYPES.contains(targetType)) {
             throw new IllegalArgumentException("不支援的 targetType：" + targetType);
         }
+    }
+
+    /**
+     * 決定任務的 apiMode：
+     * - 前端有指定就以前端為主
+     * - NARROWCAST 強制設為 MULTICAST（其實這欄位對 narrowcast 不會用到）
+     * - 沒指定預設 PUSH
+     */
+    private String resolveApiMode(BroadcastCreateRequest req) {
+        if ("NARROWCAST".equals(req.getTargetType())) {
+            return "MULTICAST";
+        }
+        String mode = req.getApiMode();
+        if (mode == null || mode.isBlank()) {
+            return "PUSH";
+        }
+        if (!"PUSH".equals(mode) && !"MULTICAST".equals(mode)) {
+            throw new IllegalArgumentException("不支援的 apiMode：" + mode);
+        }
+        return mode;
     }
 
     private String resolveMessageContent(BroadcastCreateRequest req) {
@@ -539,6 +561,7 @@ public class BroadcastService {
         dto.setMessageContent(t.getMessageContent());
         dto.setTargetType(t.getTargetType());
         dto.setTargetFilter(t.getTargetFilter());
+        dto.setApiMode(t.getApiMode());
         dto.setStatus(t.getStatus());
         dto.setTotalRecipients(t.getTotalRecipients());
         dto.setSentCount(t.getSentCount());

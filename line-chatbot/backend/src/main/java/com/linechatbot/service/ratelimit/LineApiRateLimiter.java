@@ -61,20 +61,23 @@ public class LineApiRateLimiter {
     @Value("${broadcast.rate-limit.multicast.refill-per-second:1}")
     private double multicastRefillPerSecond;
 
+    @Value("${broadcast.rate-limit.push.capacity:300}")
+    private int pushCapacity;
+
+    /** push 每秒 5 個 → 300 req/min（LINE push 上限本身較寬，保守 buffer 即可） */
+    @Value("${broadcast.rate-limit.push.refill-per-second:5}")
+    private double pushRefillPerSecond;
+
     private DefaultRedisScript<Long> script;
 
     @PostConstruct
     public void init() {
         script = new DefaultRedisScript<>(LUA_SCRIPT, Long.class);
-        log.info("LineApiRateLimiter 已初始化：multicast capacity={}, refill={}/s",
-                multicastCapacity, multicastRefillPerSecond);
+        log.info("LineApiRateLimiter 已初始化：multicast capacity={}, refill={}/s; push capacity={}, refill={}/s",
+                multicastCapacity, multicastRefillPerSecond, pushCapacity, pushRefillPerSecond);
     }
 
-    /**
-     * 嘗試取得一個 multicast token。
-     *
-     * @return true = 成功取得；false = 配額用盡，呼叫方應 backoff
-     */
+    /** @return false 代表配額用盡，呼叫方應 backoff */
     public boolean tryAcquireMulticast() {
         return tryAcquire("rate:multicast", multicastCapacity, multicastRefillPerSecond / 1000.0);
     }
@@ -90,6 +93,25 @@ public class LineApiRateLimiter {
             if (tryAcquireMulticast()) return true;
             try {
                 Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
+    public boolean tryAcquirePush() {
+        return tryAcquire("rate:push", pushCapacity, pushRefillPerSecond / 1000.0);
+    }
+
+    /** 超時返回 false */
+    public boolean acquirePush(long waitMaxMs) {
+        long deadline = System.currentTimeMillis() + waitMaxMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (tryAcquirePush()) return true;
+            try {
+                Thread.sleep(20);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return false;
