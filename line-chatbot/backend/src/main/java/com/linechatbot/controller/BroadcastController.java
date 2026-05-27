@@ -5,6 +5,7 @@ import com.linechatbot.model.dto.BroadcastCreateRequest;
 import com.linechatbot.service.BroadcastProgressService;
 import com.linechatbot.service.BroadcastService;
 import com.linechatbot.service.BroadcastStatisticsService;
+import com.linechatbot.service.MulticastDeliveryStatsService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
@@ -28,6 +29,7 @@ public class BroadcastController {
     private final BroadcastService broadcastService;
     private final BroadcastStatisticsService statisticsService;
     private final BroadcastProgressService progressService;
+    private final MulticastDeliveryStatsService multicastDeliveryStatsService;
 
     /**
      * 任務列表
@@ -118,6 +120,22 @@ public class BroadcastController {
                 "success", true,
                 "data", broadcastService.cancel(id),
                 "message", "任務已取消"
+        ));
+    }
+
+    /**
+     * 手動觸發 multicast 日送達結算（admin/manager 用，避免乾等 scheduler tick）。
+     * POST /api/broadcasts/multicast-delivery/reconcile
+     */
+    @PostMapping("/multicast-delivery/reconcile")
+    @PreAuthorize("hasAnyRole('MANAGER', 'ADMIN')")
+    public ResponseEntity<Map<String, Object>> reconcileMulticastDelivery() {
+        MulticastDeliveryStatsService.ReconcileSummary summary =
+                multicastDeliveryStatsService.reconcileNow();
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "data", summary,
+                "message", "已觸發 multicast 日送達結算"
         ));
     }
 
