@@ -567,6 +567,7 @@ public class BroadcastService {
         dto.setSentCount(t.getSentCount());
         dto.setSuccessCount(t.getSuccessCount());
         dto.setFailedCount(t.getFailedCount());
+        dto.setLineDeliveredDelta(t.getLineDeliveredDelta());
         dto.setScheduledAt(t.getScheduledAt());
         dto.setStartedAt(t.getStartedAt());
         dto.setFinishedAt(t.getFinishedAt());

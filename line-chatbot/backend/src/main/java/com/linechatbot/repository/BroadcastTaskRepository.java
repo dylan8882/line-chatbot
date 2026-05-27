@@ -37,4 +37,22 @@ public interface BroadcastTaskRepository extends JpaRepository<BroadcastTask, Lo
 
     /** 取得仍在執行中的 narrowcast 任務（給進度 poller） */
     List<BroadcastTask> findByTargetTypeAndStatus(String targetType, String status);
+
+    /**
+     * 找出已完成（COMPLETED）且尚未結算 LINE 平台日送達增量的 multicast 任務。
+     * 由 MulticastDeliveryStatsScheduler 定期撈這些任務、查 LINE API 並結算。
+     *
+     * <p>LINE delivery API 約 5–10 分鐘延遲，所以加 finishedAt &lt;= :before 條件
+     * （:before = now − 5min）。
+     */
+    @Query("""
+            SELECT t FROM BroadcastTask t
+            WHERE t.apiMode = 'MULTICAST'
+              AND t.status = 'COMPLETED'
+              AND t.lineDeliveredDelta IS NULL
+              AND t.finishedAt IS NOT NULL
+              AND t.finishedAt <= :before
+            ORDER BY t.finishedAt
+            """)
+    List<BroadcastTask> findMulticastPendingDeliveryStats(@Param("before") LocalDateTime before);
 }

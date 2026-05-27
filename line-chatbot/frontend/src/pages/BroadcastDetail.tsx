@@ -18,6 +18,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -281,6 +282,30 @@ export default function BroadcastDetail() {
           <span>已送：{task.sentCount}</span>
           <span style={{ color: '#52c41a' }}>成功：{task.successCount}</span>
           <span style={{ color: '#ff4d4f' }}>失敗：{task.failedCount}</span>
+          {task.apiMode === 'MULTICAST' && (
+            <Tooltip
+              title={
+                <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                  Multicast 模式 LINE 不會回 per-user 結果，只能透過{' '}
+                  <code>GET /v2/bot/message/delivery/multicast</code> 拿當日累計送達數。
+                  本欄為「LINE 端當日累計差 − 上次查詢時的累計差」=&nbsp;本任務分到的增量。
+                  <br />
+                  <br />
+                  注意事項：
+                  <ul style={{ paddingLeft: 16, margin: 4 }}>
+                    <li>LINE 統計約 5–10 分鐘延遲，完成後不會立刻有值</li>
+                    <li>同一天多個 multicast 任務共享累計，是估算非精準歸因</li>
+                    <li>含本系統外的其他 multicast 呼叫（例如管理介面手動發送）</li>
+                  </ul>
+                </div>
+              }
+            >
+              <span style={{ color: '#1677ff', cursor: 'help' }}>
+                LINE 平台日送達增量：
+                {task.lineDeliveredDelta == null ? '結算中…' : task.lineDeliveredDelta}
+              </span>
+            </Tooltip>
+          )}
         </Space>
       </Card>
 

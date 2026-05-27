@@ -78,6 +78,14 @@ public class BroadcastTask {
     @Builder.Default
     private Integer failedCount = 0;
 
+    /**
+     * LINE 平台日送達增量（僅 multicast task 結算後填寫）：
+     * 任務完成 ≥ 5 分鐘後由 scheduler 撈 LINE delivery API 統計差異算出。
+     * NULL = 尚未結算或非 multicast 任務。
+     */
+    @Column(name = "line_delivered_delta")
+    private Long lineDeliveredDelta;
+
     @Column(name = "scheduled_at")
     private LocalDateTime scheduledAt;
 
