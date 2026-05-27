@@ -26,6 +26,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -195,7 +197,7 @@ class BroadcastServiceTest {
     }
 
     @Test
-    @DisplayName("submit：正常路徑切 chunks 並推入 Redis Stream")
+    @DisplayName("submit：正常路徑切 chunks 並推入 Redis Stream（race condition fix 後需 afterCommit）")
     void submit_normalPath_createsChunksAndEnqueues() {
         BroadcastTask t = baseTask(1L);
         t.setTargetType("ALL");
@@ -209,7 +211,17 @@ class BroadcastServiceTest {
             return c;
         });
 
-        broadcastService.submit(1L);
+        // submit 使用 TransactionSynchronizationManager.registerSynchronization
+        // 解 race condition，單元測試需手動建立 sync 容器並觸發 afterCommit
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            broadcastService.submit(1L);
+            for (TransactionSynchronization sync : TransactionSynchronizationManager.getSynchronizations()) {
+                sync.afterCommit();
+            }
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
 
         assertThat(t.getStatus()).isEqualTo("RUNNING");
         assertThat(t.getTotalRecipients()).isEqualTo(3);
