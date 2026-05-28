@@ -215,8 +215,22 @@ export interface MessageTemplateInput {
 /** 推播目標類型 */
 export type BroadcastTargetType = 'ALL' | 'TAGS' | 'USER_LIST' | 'NARROWCAST'
 
+/** 推播目標類型對應中文（UI 顯示用，Narrowcast 為 LINE 官方專有名詞保留英文）*/
+export const TARGET_TYPE_LABEL: Record<BroadcastTargetType, string> = {
+  ALL: '全部已加好友',
+  TAGS: '依標籤',
+  USER_LIST: '指定用戶',
+  NARROWCAST: 'Narrowcast',
+}
+
 /** LINE API 模式：PUSH 逐一精準（可取 per-user 結果）/ MULTICAST 批量（僅整批回報）*/
 export type BroadcastApiMode = 'PUSH' | 'MULTICAST'
+
+/** API 模式對應中文標籤（Push/Multicast 為 LINE 官方專有名詞保留英文）*/
+export const API_MODE_LABEL: Record<BroadcastApiMode, string> = {
+  PUSH: 'Push API（精準）',
+  MULTICAST: 'Multicast API（批量）',
+}
 
 /** 多標籤匹配方式 */
 export type TagMatch = 'ANY' | 'ALL'

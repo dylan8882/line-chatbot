@@ -46,7 +46,13 @@ public class LineUser {
     @Column(length = 10)
     private String language;
 
-    /** 狀態：FOLLOWED / BLOCKED */
+    /**
+     * 用戶狀態：
+     * <ul>
+     *   <li>FOLLOWED — 已加好友（可推播）</li>
+     *   <li>BLOCKED — 已封鎖 / 退追（無法再收到推播）</li>
+     * </ul>
+     */
     @Column(nullable = false, length = 20)
     @Builder.Default
     private String status = "FOLLOWED";

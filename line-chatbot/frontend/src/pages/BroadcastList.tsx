@@ -11,6 +11,7 @@ import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import { getBroadcasts } from '../api/broadcasts'
 import usePermissions from '../hooks/usePermissions'
 import type { BroadcastStatus, BroadcastTask } from '../types'
+import { TARGET_TYPE_LABEL } from '../types'
 
 const { Title } = Typography
 
@@ -86,7 +87,8 @@ export default function BroadcastList() {
     {
       title: '目標',
       dataIndex: 'targetType',
-      width: 100,
+      width: 120,
+      render: (t: BroadcastTask['targetType']) => TARGET_TYPE_LABEL[t] ?? t,
     },
     {
       title: '進度',

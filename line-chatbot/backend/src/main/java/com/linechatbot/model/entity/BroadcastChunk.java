@@ -41,7 +41,18 @@ public class BroadcastChunk {
     @Column(name = "recipient_ids", nullable = false)
     private String recipientIds;
 
-    /** PENDING / SENDING / SUCCESS / FAILED / RETRYING */
+    /**
+     * 批次（chunk）狀態：
+     * <ul>
+     *   <li>PENDING — 已建立、排隊中（等 worker 從 Redis Stream 撈）</li>
+     *   <li>SENDING — worker 正在打 LINE API（multicast / push）</li>
+     *   <li>SUCCESS — 整批成功（multicast 200 / push 全人 200）</li>
+     *   <li>PARTIAL — 僅 push 模式：部分 user 4xx 失敗，其餘成功</li>
+     *   <li>FAILED — 重試上限後仍失敗</li>
+     *   <li>RETRYING — 上次失敗（非 4xx），等下次 backoff 重試</li>
+     *   <li>CANCELLED — 任務取消時連帶取消</li>
+     * </ul>
+     */
     @Column(nullable = false, length = 20)
     @Builder.Default
     private String status = "PENDING";

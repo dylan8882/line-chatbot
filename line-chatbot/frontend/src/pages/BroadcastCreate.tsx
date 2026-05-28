@@ -20,19 +20,27 @@ import {
   message,
 } from 'antd'
 import dayjs, { Dayjs } from 'dayjs'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { createBroadcast, estimateBroadcast, submitBroadcast, testSendBroadcast } from '../api/broadcasts'
 import { getMessageTemplates } from '../api/messageTemplates'
 import { getTags } from '../api/tags'
 import TagPicker from '../components/Tags/TagPicker'
 import FlexPreview from '../components/FlexEditor/FlexPreview'
+import LineUserPicker from '../components/Broadcast/LineUserPicker'
 import type {
   BroadcastCreateRequest,
   BroadcastTargetType,
+  LineUser,
   MessageTemplate,
   Tag,
   TagMatch,
 } from '../types'
+
+/** route state：從 LineUsers 頁帶過來的預選 */
+interface LocationState {
+  userIds?: number[]
+  users?: LineUser[]
+}
 
 const { Title, Text } = Typography
 const { TextArea } = Input
@@ -47,12 +55,15 @@ interface FormValues {
   targetType: BroadcastTargetType
   tagIds?: number[]
   tagMatch?: TagMatch
+  userIds?: number[]
   apiMode: 'PUSH' | 'MULTICAST'
   scheduledAt?: Dayjs | null
 }
 
 export default function BroadcastCreate() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const initialState = (location.state as LocationState | null) ?? null
   const [form] = Form.useForm<FormValues>()
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -62,12 +73,22 @@ export default function BroadcastCreate() {
   const [testOpen, setTestOpen] = useState(false)
   const [testUserId, setTestUserId] = useState('')
   const [draftId, setDraftId] = useState<number | null>(null)
+  // 從 LineUsers 頁帶過來的預載用戶物件
+  const [initialUsers] = useState<LineUser[]>(initialState?.users ?? [])
 
   useEffect(() => {
     getMessageTemplates().then((r) => setTemplates(r.data.data)).catch(() => {})
     getTags().then((r) => setTags(r.data.data)).catch(() => {})
-    form.setFieldsValue({ messageSource: 'TEMPLATE', targetType: 'ALL', tagMatch: 'ANY', apiMode: 'PUSH' })
-  }, [form])
+    const stateUserIds = initialState?.userIds ?? []
+    const hasUserList = stateUserIds.length > 0
+    form.setFieldsValue({
+      messageSource: 'TEMPLATE',
+      targetType: hasUserList ? 'USER_LIST' : 'ALL',
+      tagMatch: 'ANY',
+      userIds: hasUserList ? stateUserIds : undefined,
+      apiMode: 'PUSH', // USER_LIST 與一般情境都預設 PUSH
+    })
+  }, [form, initialState])
 
   /** 將表單值轉為後端 CreateRequest */
   const buildRequest = (values: FormValues): BroadcastCreateRequest => ({
@@ -77,6 +98,7 @@ export default function BroadcastCreate() {
     targetType: values.targetType,
     tagIds: values.targetType === 'TAGS' ? values.tagIds : undefined,
     tagMatch: values.targetType === 'TAGS' ? values.tagMatch ?? 'ANY' : undefined,
+    userIds: values.targetType === 'USER_LIST' ? values.userIds : undefined,
     // NARROWCAST 不用 apiMode（後端強制忽略）
     apiMode: values.targetType === 'NARROWCAST' ? undefined : (values.apiMode ?? 'PUSH'),
     scheduledAt: values.scheduledAt ? values.scheduledAt.toISOString() : undefined,
@@ -275,12 +297,34 @@ export default function BroadcastCreate() {
           )}
 
           {targetType === 'USER_LIST' && (
-            <Alert
-              type="info"
-              showIcon
-              message="USER_LIST 模式：請先到「LINE 用戶」頁面選取用戶後再使用（Phase 2 暫時透過 API 直接呼叫）。"
-              style={{ marginBottom: 8 }}
-            />
+            <>
+              <Form.Item
+                name="userIds"
+                label="指定用戶"
+                rules={[
+                  {
+                    validator: (_, v: number[] | undefined) =>
+                      v && v.length > 0
+                        ? Promise.resolve()
+                        : Promise.reject(new Error('請選擇至少一位用戶')),
+                  },
+                ]}
+                extra={
+                  initialUsers.length > 0
+                    ? `已從「LINE 用戶」頁帶入 ${initialUsers.length} 位，可繼續搜尋加減。`
+                    : '輸入暱稱或 LINE userId 搜尋；可多選。'
+                }
+              >
+                <LineUserPicker initialUsers={initialUsers} />
+              </Form.Item>
+              <Alert
+                type="info"
+                showIcon
+                message="指定用戶自動套用 Push API"
+                description="少量指定收件人通常需要 per-user 結果（誰收到 / 誰退追），故鎖定 Push 模式；如需大量整批送請改用「全部已加好友」或「依標籤」並挑 Multicast。"
+                style={{ marginBottom: 8 }}
+              />
+            </>
           )}
 
           {targetType !== 'NARROWCAST' && (
@@ -289,7 +333,7 @@ export default function BroadcastCreate() {
               label="LINE API 模式"
               tooltip="Push：逐一發送、能取得 per-user 成敗（200/4xx），預設值。Multicast：批量發送（500 人/批）、LINE 僅回整批 200，無 per-user 結果。"
             >
-              <Radio.Group>
+              <Radio.Group disabled={targetType === 'USER_LIST'}>
                 <Radio.Button value="PUSH">Push API（精準）</Radio.Button>
                 <Radio.Button value="MULTICAST">Multicast API（批量）</Radio.Button>
               </Radio.Group>

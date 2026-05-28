@@ -14,10 +14,12 @@ import {
   Space,
   Table,
   Tag as AntTag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
-import { TagsOutlined } from '@ant-design/icons'
+import { CopyOutlined, NotificationOutlined, TagsOutlined } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import { assignTags, bulkTag, getLineUsers } from '../api/lineUsers'
 import { getTags } from '../api/tags'
@@ -30,6 +32,7 @@ const { Title } = Typography
 const PAGE_SIZE = 20
 
 export default function LineUsers() {
+  const navigate = useNavigate()
   const [data, setData] = useState<LineUser[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -140,6 +143,12 @@ export default function LineUsers() {
       render: (v) => v ?? <span style={{ color: '#999' }}>未取得</span>,
     },
     {
+      title: 'LINE userId',
+      dataIndex: 'lineUserId',
+      width: 180,
+      render: (id: string) => <LineUserIdCell lineUserId={id} />,
+    },
+    {
       title: '狀態',
       dataIndex: 'status',
       width: 100,
@@ -181,14 +190,31 @@ export default function LineUsers() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>LINE 用戶</Title>
-        <Button
-          type="primary"
-          icon={<TagsOutlined />}
-          disabled={!selectedRowKeys.length}
-          onClick={() => setBulkOpen(true)}
-        >
-          批量貼標籤（已選 {selectedRowKeys.length}）
-        </Button>
+        <Space>
+          <Button
+            icon={<NotificationOutlined />}
+            disabled={!selectedRowKeys.length}
+            onClick={() => {
+              const selectedUsers = data.filter((u) => selectedRowKeys.includes(u.id))
+              navigate('/broadcasts/new', {
+                state: {
+                  userIds: selectedUsers.map((u) => u.id),
+                  users: selectedUsers,
+                },
+              })
+            }}
+          >
+            對所選人推播（{selectedRowKeys.length}）
+          </Button>
+          <Button
+            type="primary"
+            icon={<TagsOutlined />}
+            disabled={!selectedRowKeys.length}
+            onClick={() => setBulkOpen(true)}
+          >
+            批量貼標籤（已選 {selectedRowKeys.length}）
+          </Button>
+        </Space>
       </div>
 
       <Space style={{ marginBottom: 16 }} wrap>
@@ -267,5 +293,38 @@ export default function LineUsers() {
         </Space>
       </Modal>
     </div>
+  )
+}
+
+/**
+ * LINE userId 顯示 + 複製按鈕。
+ * userId 太長（U + 32 hex）故截短顯示前 6 碼 + …，hover 看完整、點按鈕複製到剪貼簿。
+ */
+function LineUserIdCell({ lineUserId }: { lineUserId: string }) {
+  const short =
+    lineUserId.length > 6 ? `${lineUserId.slice(0, 6)}…` : lineUserId
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(lineUserId)
+      message.success('已複製 LINE userId')
+    } catch {
+      message.error('複製失敗，瀏覽器不支援或被禁止')
+    }
+  }
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <Tooltip title={lineUserId}>
+        <code style={{ fontSize: 12 }}>{short}</code>
+      </Tooltip>
+      <Button
+        type="text"
+        size="small"
+        icon={<CopyOutlined />}
+        onClick={handleCopy}
+        title="複製完整 LINE userId"
+      />
+    </span>
   )
 }

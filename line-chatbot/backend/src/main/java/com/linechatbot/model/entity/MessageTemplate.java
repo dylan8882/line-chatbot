@@ -30,7 +30,15 @@ public class MessageTemplate {
     @Column(nullable = false, length = 100)
     private String name;
 
-    /** TEXT / FLEX / IMAGE / TEMPLATE */
+    /**
+     * 訊息類型：
+     * <ul>
+     *   <li>TEXT — 純文字訊息</li>
+     *   <li>FLEX — Flex Message（彈性版型）</li>
+     *   <li>IMAGE — 圖片訊息</li>
+     *   <li>TEMPLATE — Template Message（按鈕 / 確認 / 輪播等預設版型）</li>
+     * </ul>
+     */
     @Column(name = "message_type", nullable = false, length = 20)
     private String messageType;
 

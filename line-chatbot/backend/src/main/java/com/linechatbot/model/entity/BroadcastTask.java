@@ -38,7 +38,15 @@ public class BroadcastTask {
     @Column(name = "message_content", nullable = false)
     private String messageContent;
 
-    /** ALL / TAGS / USER_LIST */
+    /**
+     * 推播目標類型：
+     * <ul>
+     *   <li>ALL — 全部已加好友</li>
+     *   <li>TAGS — 依標籤（搭配 targetFilter.tagIds / tagMatch）</li>
+     *   <li>USER_LIST — 指定用戶（搭配 targetFilter.userIds）</li>
+     *   <li>NARROWCAST — 走 LINE 官方大規模分發 API，audience 由 LINE 平台自管</li>
+     * </ul>
+     */
     @Column(name = "target_type", nullable = false, length = 20)
     private String targetType;
 
@@ -56,7 +64,17 @@ public class BroadcastTask {
     private String apiMode = "PUSH";
 
     /**
-     * DRAFT / QUEUED / RUNNING / PAUSED / COMPLETED / FAILED / CANCELLED
+     * 任務狀態：
+     * <ul>
+     *   <li>DRAFT — 草稿（剛建立，未提交）</li>
+     *   <li>QUEUED — 排隊中（部分 flow 用，目前較少出現）</li>
+     *   <li>SCHEDULED — 已排程（scheduledAt 未到）</li>
+     *   <li>RUNNING — 執行中（已分片並推入 Stream，worker 處理中）</li>
+     *   <li>PAUSED — 已暫停（保留位，現階段未實作暫停）</li>
+     *   <li>COMPLETED — 已完成（所有 chunk 都到終態）</li>
+     *   <li>FAILED — 失敗（提交時即沒有收件人 / 所有 chunk 失敗）</li>
+     *   <li>CANCELLED — 已取消</li>
+     * </ul>
      */
     @Column(nullable = false, length = 20)
     @Builder.Default

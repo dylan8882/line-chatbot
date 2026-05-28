@@ -45,6 +45,7 @@ import type {
   BroadcastTask,
   ClickStatistics,
 } from '../types'
+import { API_MODE_LABEL, TARGET_TYPE_LABEL } from '../types'
 
 const { Title } = Typography
 
@@ -312,7 +313,10 @@ export default function BroadcastDetail() {
       <Card title="任務資訊" size="small" style={{ marginBottom: 16 }}>
         <Descriptions size="small" column={2}>
           <Descriptions.Item label="任務 ID">{task.id}</Descriptions.Item>
-          <Descriptions.Item label="目標類型">{task.targetType}</Descriptions.Item>
+          <Descriptions.Item label="目標類型">{TARGET_TYPE_LABEL[task.targetType]}</Descriptions.Item>
+          {task.targetType !== 'NARROWCAST' && (
+            <Descriptions.Item label="API 模式">{API_MODE_LABEL[task.apiMode]}</Descriptions.Item>
+          )}
           <Descriptions.Item label="目標篩選" span={2}>
             <code style={{ fontSize: 12 }}>{task.targetFilter ?? '—'}</code>
           </Descriptions.Item>

@@ -24,12 +24,12 @@ public interface LineUserRepository extends JpaRepository<LineUser, Long> {
     long countByStatus(String status);
 
     /**
-     * 依關鍵字（暱稱）與標籤篩選
+     * 依關鍵字（暱稱 或 LINE userId）與標籤篩選
      */
     @Query("""
             SELECT DISTINCT u FROM LineUser u
             LEFT JOIN u.tags t
-            WHERE (:keyword IS NULL OR u.displayName LIKE %:keyword%)
+            WHERE (:keyword IS NULL OR u.displayName LIKE %:keyword% OR u.lineUserId LIKE %:keyword%)
               AND (:status IS NULL OR u.status = :status)
               AND (:tagIds IS NULL OR t.id IN :tagIds)
             """)
