@@ -1,11 +1,4 @@
-/**
- * 推播任務詳情
- * Phase 4 升級：
- *  - SSE 即時進度推送（取代 3 秒輪詢），event = "progress"
- *  - 新增 StatisticsPanel（成功率、發送速率、錯誤分布）
- *  - 新增 FailureTable（失敗 / 重試中 chunk 清單）
- *  - 進度欄位優先採用 SSE 事件即時值，DB 詳情仍用初始/手動 refresh
- */
+/** 推播詳情：SSE 即時進度 + 成效統計 + 批次清單。終態自動斷 SSE 並 refetch。 */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Alert,
@@ -16,29 +9,24 @@ import {
   Popconfirm,
   Progress,
   Space,
-  Table,
   Tag,
   Typography,
   message,
 } from 'antd'
 import { ExperimentOutlined, ReloadOutlined, StopOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
-import type { ColumnsType } from 'antd/es/table'
 import {
   cancelBroadcast,
   getBroadcastClicks,
-  getBroadcastFailures,
   getBroadcastProgress,
   getBroadcastStatistics,
   openProgressStream,
   submitBroadcast,
 } from '../api/broadcasts'
 import StatisticsPanel from '../components/Broadcast/StatisticsPanel'
-import FailureTable from '../components/Broadcast/FailureTable'
+import ChunkTable from '../components/Broadcast/ChunkTable'
 import ClickStatsPanel from '../components/Broadcast/ClickStatsPanel'
 import type {
-  BroadcastChunkStatus,
-  BroadcastFailure,
   BroadcastProgressEvent,
   BroadcastStatistics,
   BroadcastStatus,
@@ -71,15 +59,6 @@ const STATUS_LABEL: Record<BroadcastStatus, string> = {
   CANCELLED: '已取消',
 }
 
-const CHUNK_STATUS_COLOR: Record<BroadcastChunkStatus, string> = {
-  PENDING: 'default',
-  SENDING: 'processing',
-  SUCCESS: 'success',
-  FAILED: 'error',
-  RETRYING: 'warning',
-  CANCELLED: 'default',
-}
-
 const FINAL_STATUSES: BroadcastStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED']
 
 export default function BroadcastDetail() {
@@ -88,7 +67,6 @@ export default function BroadcastDetail() {
   const [task, setTask] = useState<BroadcastTask | null>(null)
   const [loading, setLoading] = useState(false)
   const [stats, setStats] = useState<BroadcastStatistics | null>(null)
-  const [failures, setFailures] = useState<BroadcastFailure[]>([])
   const [clickStats, setClickStats] = useState<ClickStatistics | null>(null)
   const [sseConnected, setSseConnected] = useState(false)
   const eventSourceRef = useRef<EventSource | null>(null)
@@ -97,15 +75,13 @@ export default function BroadcastDetail() {
     if (!id) return
     setLoading(true)
     try {
-      const [detailRes, statsRes, failsRes, clicksRes] = await Promise.all([
+      const [detailRes, statsRes, clicksRes] = await Promise.all([
         getBroadcastProgress(Number(id)),
         getBroadcastStatistics(Number(id)),
-        getBroadcastFailures(Number(id)),
         getBroadcastClicks(Number(id)),
       ])
       setTask(detailRes.data.data)
       setStats(statsRes.data.data)
-      setFailures(failsRes.data.data)
       setClickStats(clicksRes.data.data)
     } catch (err: unknown) {
       message.error(err instanceof Error ? err.message : '載入失敗')
@@ -118,9 +94,7 @@ export default function BroadcastDetail() {
     fetchAll()
   }, [fetchAll])
 
-  /**
-   * SSE 連線：執行中或排隊中時建立 EventSource，事件達終態時自動斷線並 refetch。
-   */
+  // 任務終態時自動關 EventSource、並 refetch 拿 final chunks / stats
   useEffect(() => {
     if (!task || !id) return
     if (FINAL_STATUSES.includes(task.status)) {
@@ -155,7 +129,7 @@ export default function BroadcastDetail() {
           setTimeout(fetchAll, 500)
         }
       } catch {
-        // 忽略解析錯誤
+        /* ignore */
       }
     })
     es.onerror = () => setSseConnected(false)
@@ -195,26 +169,6 @@ export default function BroadcastDetail() {
 
   const percent =
     task.totalRecipients > 0 ? Math.round((task.sentCount / task.totalRecipients) * 100) : 0
-
-  const chunkColumns: ColumnsType<NonNullable<BroadcastTask['chunks']>[number]> = [
-    { title: '#', dataIndex: 'chunkIndex', width: 60 },
-    { title: '收件人數', dataIndex: 'recipientCount', width: 100, align: 'right' },
-    {
-      title: '狀態',
-      dataIndex: 'status',
-      width: 100,
-      render: (s: BroadcastChunkStatus) => <Tag color={CHUNK_STATUS_COLOR[s]}>{s}</Tag>,
-    },
-    { title: '嘗試次數', dataIndex: 'attempts', width: 90, align: 'right' },
-    { title: '錯誤碼', dataIndex: 'errorCode', width: 140 },
-    { title: '錯誤訊息', dataIndex: 'errorMessage', ellipsis: true },
-    {
-      title: '發送時間',
-      dataIndex: 'sentAt',
-      width: 180,
-      render: (v) => (v ? new Date(v).toLocaleString('zh-TW') : '—'),
-    },
-  ]
 
   const showLiveBadge = !FINAL_STATUSES.includes(task.status)
 
@@ -315,7 +269,7 @@ export default function BroadcastDetail() {
       </div>
 
       <div style={{ marginBottom: 16 }}>
-        <FailureTable failures={failures} loading={loading} />
+        <ChunkTable chunks={task.chunks ?? []} loading={loading} />
       </div>
 
       <Card title="任務資訊" size="small" style={{ marginBottom: 16 }}>
@@ -347,16 +301,6 @@ export default function BroadcastDetail() {
         <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, overflow: 'auto' }}>
           {prettyJson(task.messageContent)}
         </pre>
-      </Card>
-
-      <Card title={`批次 (${task.chunks?.length ?? 0})`} size="small">
-        <Table
-          rowKey="id"
-          columns={chunkColumns}
-          dataSource={task.chunks ?? []}
-          pagination={false}
-          size="small"
-        />
       </Card>
     </div>
   )

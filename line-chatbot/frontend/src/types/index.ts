@@ -251,6 +251,7 @@ export type BroadcastChunkStatus =
   | 'PENDING'
   | 'SENDING'
   | 'SUCCESS'
+  | 'PARTIAL'
   | 'FAILED'
   | 'RETRYING'
   | 'CANCELLED'
