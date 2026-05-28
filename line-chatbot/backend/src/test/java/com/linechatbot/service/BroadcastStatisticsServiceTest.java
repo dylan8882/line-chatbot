@@ -91,7 +91,7 @@ class BroadcastStatisticsServiceTest {
     }
 
     @Test
-    @DisplayName("getStatistics：errorBreakdown 依 errorCode 分組")
+    @DisplayName("getStatistics：errorBreakdown 依 errorCode 分組，count 為人數")
     void getStatistics_errorBreakdownGroups() {
         BroadcastTask task = baseTask(1L, "FAILED");
         when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
@@ -103,10 +103,55 @@ class BroadcastStatisticsServiceTest {
 
         BroadcastStatisticsDTO stat = service.getStatistics(1L);
 
+        // chunkWithError 預設 ["Ufail"]（1 人），所以 2 個 chunk = 2 人、1 個 = 1 人
         assertThat(stat.getErrorBreakdown()).hasSize(2);
         assertThat(stat.getErrorBreakdown())
                 .extracting(b -> b.getErrorCode() + ":" + b.getCount())
                 .containsExactlyInAnyOrder("TimeoutException:2", "ConnectException:1");
+    }
+
+    @Test
+    @DisplayName("getStatistics：FAILED chunk 內多人時，errorBreakdown 用整 chunk 人數累加")
+    void getStatistics_errorBreakdown_failedChunkCountsAllUsers() {
+        BroadcastTask task = baseTask(1L, "FAILED");
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
+
+        // 一個 chunk 含 500 個 user，全失敗 → 該錯誤碼應算 500 人，不是 1
+        BroadcastChunk bigFailed = chunkOf(1, "FAILED", 4,
+                "[" + java.util.stream.IntStream.range(0, 500)
+                        .mapToObj(i -> "\"U" + i + "\"").collect(java.util.stream.Collectors.joining(",")) + "]");
+        bigFailed.setErrorCode("TimeoutException");
+        bigFailed.setErrorMessage("Connect timeout");
+
+        when(chunkRepository.findByTaskIdOrderByChunkIndex(1L)).thenReturn(List.of(bigFailed));
+
+        BroadcastStatisticsDTO stat = service.getStatistics(1L);
+
+        assertThat(stat.getErrorBreakdown()).hasSize(1);
+        assertThat(stat.getErrorBreakdown().get(0).getErrorCode()).isEqualTo("TimeoutException");
+        assertThat(stat.getErrorBreakdown().get(0).getCount()).isEqualTo(500);
+    }
+
+    @Test
+    @DisplayName("getStatistics：PARTIAL chunk 從 error_message 解析失敗人數")
+    void getStatistics_errorBreakdown_partialChunkParsesFailedCount() {
+        BroadcastTask task = baseTask(1L, "COMPLETED");
+        task.setApiMode("PUSH");
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
+
+        // PARTIAL chunk：500 人裡有 23 個 4xx，error_message 寫入 "23 個 user push 失敗（4xx）"
+        BroadcastChunk partial = chunkOf(1, "PARTIAL", 1,
+                "[" + java.util.stream.IntStream.range(0, 500)
+                        .mapToObj(i -> "\"U" + i + "\"").collect(java.util.stream.Collectors.joining(",")) + "]");
+        partial.setErrorCode("PARTIAL_FAILURES");
+        partial.setErrorMessage("23 個 user push 失敗（4xx）");
+
+        when(chunkRepository.findByTaskIdOrderByChunkIndex(1L)).thenReturn(List.of(partial));
+
+        BroadcastStatisticsDTO stat = service.getStatistics(1L);
+
+        assertThat(stat.getErrorBreakdown()).hasSize(1);
+        assertThat(stat.getErrorBreakdown().get(0).getCount()).isEqualTo(23);
     }
 
     @Test

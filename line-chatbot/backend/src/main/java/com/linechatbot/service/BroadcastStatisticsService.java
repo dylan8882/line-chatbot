@@ -24,6 +24,8 @@ import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 推播成效統計查詢：基於 broadcast_chunks 表計算成功率、錯誤分布、發送速率等指標。
@@ -72,12 +74,14 @@ public class BroadcastStatisticsService {
                     // PUSH 模式部分使用者 4xx；chunk 整體當完成，不重試
                     successChunks++;
                     String code = c.getErrorCode() != null ? c.getErrorCode() : "PARTIAL_FAILURES";
-                    errorBreakdown.merge(code, 1, Integer::sum);
+                    // errorBreakdown 以「失敗人數」為單位（不是 chunk 數）
+                    errorBreakdown.merge(code, parseFailedUserCount(c), Integer::sum);
                 }
                 case "FAILED" -> {
                     failedChunks++;
                     String code = c.getErrorCode() != null ? c.getErrorCode() : "UNKNOWN";
-                    errorBreakdown.merge(code, 1, Integer::sum);
+                    // 整個 chunk 失敗 = chunk 內所有收件人都算失敗
+                    errorBreakdown.merge(code, parseRecipientCount(c), Integer::sum);
                 }
                 case "RETRYING", "SENDING" -> retryingChunks++;
                 case "PENDING" -> pendingChunks++;
@@ -199,6 +203,27 @@ public class BroadcastStatisticsService {
         } catch (JsonProcessingException e) {
             return 0;
         }
+    }
+
+    /**
+     * 從 PARTIAL chunk 的 error_message 抽出失敗人數。
+     * BroadcastChunkProcessor 寫入格式為 "{N} 個 user push 失敗（4xx）"。
+     * 抽不到時回 0（保守、不誇大錯誤數）。
+     */
+    private static final Pattern PARTIAL_FAILED_COUNT = Pattern.compile("^(\\d+)");
+
+    private int parseFailedUserCount(BroadcastChunk c) {
+        String msg = c.getErrorMessage();
+        if (msg == null) return 0;
+        Matcher m = PARTIAL_FAILED_COUNT.matcher(msg);
+        if (m.find()) {
+            try {
+                return Integer.parseInt(m.group(1));
+            } catch (NumberFormatException ignored) {
+                return 0;
+            }
+        }
+        return 0;
     }
 
     private BroadcastFailureDTO toFailureDTO(BroadcastChunk c) {

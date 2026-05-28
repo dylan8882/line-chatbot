@@ -128,15 +128,31 @@ export default function StatisticsPanel({ stats, task, loading }: Props) {
       </Row>
 
       {stats.errorBreakdown.length > 0 && (
-        <div style={{ marginTop: 24 }}>
-          <h4>錯誤分布</h4>
+        <div style={{ marginTop: 24, position: 'relative' }}>
+          <h4>錯誤分布（失敗人數）</h4>
+          {/* Y 軸標籤：直書「人 / 數」（由上往下，不旋轉），用 CSS writing-mode 比 SVG rotate 更可讀 */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 8,
+              top: 70,
+              fontSize: 12,
+              color: '#666',
+              writingMode: 'vertical-rl',
+              textOrientation: 'upright',
+              letterSpacing: 2,
+            }}
+          >
+            人數
+          </div>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={stats.errorBreakdown}>
+            <BarChart data={stats.errorBreakdown} margin={{ top: 5, right: 30, left: 24, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="errorCode" />
               <YAxis allowDecimals={false} />
-              <Tooltip />
-              <Bar dataKey="count" fill="#ff4d4f" />
+              <Tooltip formatter={(v: number) => [`${v} 人`, '失敗人數']} />
+              {/* maxBarSize 避免單一錯誤碼時 bar 撐滿整個寬度 */}
+              <Bar dataKey="count" fill="#ff4d4f" maxBarSize={80} />
             </BarChart>
           </ResponsiveContainer>
         </div>
