@@ -3,13 +3,14 @@
  * 顯示今日統計摘要（訊息數、QA 命中率、AI 回覆數、平均延遲）
  * 以及近 7 天訊息量趨勢折線圖
  */
-import { useEffect, useState } from 'react'
-import { Row, Col, Card, Statistic, Alert, Spin, Tag, Tooltip, Typography } from 'antd'
+import { useCallback, useEffect, useState } from 'react'
+import { Row, Col, Card, Statistic, Alert, Button, Spin, Tag, Tooltip, Typography } from 'antd'
 import {
   MessageOutlined,
   CheckCircleOutlined,
   RobotOutlined,
   ClockCircleOutlined,
+  ReloadOutlined,
   SendOutlined,
 } from '@ant-design/icons'
 import { getStats } from '../api/dashboard'
@@ -28,11 +29,24 @@ const MULTICAST_STATUS_TAG: Record<string, { color: string; label: string }> = {
   ERROR: { color: 'error', label: 'API 失敗' },
 }
 
+/** 取得「昨日」的 ISO date 字串（YYYY-MM-DD），給 multicast delivery widget 用。
+ *  LINE 對當日 multicast 累計通常隔天才 READY，故預設查昨日。 */
+function getYesterdayISO(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  // 用本地時區的年/月/日避免 toISOString 跨時區問題
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
 export default function Dashboard() {
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [multicast, setMulticast] = useState<MulticastDailyDelivery | null>(null)
+  const [multicastLoading, setMulticastLoading] = useState(false)
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -48,12 +62,24 @@ export default function Dashboard() {
     fetchStats()
   }, [])
 
-  useEffect(() => {
-    // multicast 區塊獨立載入：失敗也不影響主要 stats 顯示
-    getMulticastDailyDelivery()
-      .then((res) => setMulticast(res.data.data))
-      .catch(() => setMulticast(null))
+  /** 拉昨日 multicast 累計；首次進 dashboard 由 useEffect 自動觸發、
+   *  之後只有使用者按 refresh 才再 call。 */
+  const loadMulticastYesterday = useCallback(async () => {
+    setMulticastLoading(true)
+    try {
+      const res = await getMulticastDailyDelivery(getYesterdayISO())
+      setMulticast(res.data.data)
+    } catch {
+      setMulticast(null)
+    } finally {
+      setMulticastLoading(false)
+    }
   }, [])
+
+  useEffect(() => {
+    // 首次進入 dashboard 主動拉一次；之後完全靠 refresh 按鈕觸發
+    loadMulticastYesterday()
+  }, [loadMulticastYesterday])
 
   if (loading) {
     return (
@@ -129,20 +155,33 @@ export default function Dashboard() {
                 <div style={{ fontSize: 12, lineHeight: 1.6 }}>
                   LINE 平台對 multicast 發送的「當日累計送達數」統計：
                   <ul style={{ paddingLeft: 16, margin: 4 }}>
-                    <li>通常隔天才會 READY（最久 ~24h 延遲）</li>
+                    <li>查詢「昨日」總計，因為 LINE 對當日統計通常隔天才 READY（最久 ~24h 延遲）</li>
                     <li>同日所有 multicast 任務共用此數字</li>
                     <li>含本系統外的其他 multicast 呼叫</li>
                     <li>push 模式發送不會計入此數</li>
+                    <li>首次進 dashboard 自動拉一次；要更新請按右邊「重新整理」</li>
                   </ul>
                 </div>
               }
             >
-              <span style={{ cursor: 'help' }}>
+              <span style={{ cursor: 'help', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                 <Statistic
-                  title="今日 LINE multicast 累計送達"
+                  title={`昨日 LINE multicast 累計送達${multicast?.date ? `（${multicast.date}）` : ''}`}
                   value={multicast?.total ?? '—'}
                   prefix={<SendOutlined style={{ color: '#13c2c2' }} />}
                 />
+                <Button
+                  icon={<ReloadOutlined />}
+                  size="small"
+                  loading={multicastLoading}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    loadMulticastYesterday()
+                  }}
+                  title="重新拉昨日資料"
+                >
+                  重新整理
+                </Button>
               </span>
             </Tooltip>
           </Col>
@@ -170,7 +209,7 @@ export default function Dashboard() {
               )}
               {multicast?.status === 'UNREADY' && (
                 <div style={{ marginTop: 4 }}>
-                  LINE 統計需到次日才會 READY，今日資料明天才能看到。
+                  昨日資料 LINE 還沒 READY，過幾小時再按重新整理試試。
                 </div>
               )}
             </div>
