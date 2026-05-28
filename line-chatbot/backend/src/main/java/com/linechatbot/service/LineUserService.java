@@ -4,11 +4,15 @@ import com.linechatbot.exception.ResourceNotFoundException;
 import com.linechatbot.model.dto.BulkTagRequest;
 import com.linechatbot.model.dto.LineUserDTO;
 import com.linechatbot.model.dto.TagDTO;
+import com.linechatbot.model.entity.LineChannelConfig;
 import com.linechatbot.model.entity.LineUser;
 import com.linechatbot.model.entity.Tag;
+import com.linechatbot.repository.LineChannelConfigRepository;
 import com.linechatbot.repository.LineUserRepository;
 import com.linechatbot.repository.TagRepository;
 import com.linecorp.bot.messaging.client.MessagingApiClient;
+import com.linecorp.bot.messaging.model.PushMessageRequest;
+import com.linecorp.bot.messaging.model.TextMessage;
 import com.linecorp.bot.messaging.model.UserProfileResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,11 +20,13 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -37,6 +43,7 @@ public class LineUserService {
     private final LineUserRepository lineUserRepository;
     private final TagRepository tagRepository;
     private final MessagingApiClient messagingApiClient;
+    private final LineChannelConfigRepository channelConfigRepository;
 
     /**
      * Follow 事件處理：建立或重新啟用用戶，並嘗試抓取 LINE Profile。
@@ -54,7 +61,35 @@ public class LineUserService {
 
         LineUser saved = lineUserRepository.save(user);
         log.info("LINE 用戶 Follow：userId={}, displayName={}", lineUserId, saved.getDisplayName());
+
+        sendGreetingIfConfigured(lineUserId);
         return saved;
+    }
+
+    /**
+     * 若 LineChannelConfig.greetingEnabled = true 且 greetingMessage 非空，
+     * 透過 pushMessage 發送歡迎訊息。
+     * 例外吞掉只記 warn，避免影響 Follow 事件主流程（DB 已存）。
+     */
+    private void sendGreetingIfConfigured(String lineUserId) {
+        try {
+            LineChannelConfig config = channelConfigRepository.findById(1L).orElse(null);
+            if (config == null
+                    || !Boolean.TRUE.equals(config.getGreetingEnabled())
+                    || !StringUtils.hasText(config.getGreetingMessage())) {
+                return;
+            }
+            UUID retryKey = UUID.nameUUIDFromBytes(("greeting-" + lineUserId).getBytes());
+            messagingApiClient.pushMessage(retryKey, new PushMessageRequest(
+                    lineUserId,
+                    List.of(new TextMessage(config.getGreetingMessage())),
+                    false,
+                    null
+            )).get();
+            log.info("已發送歡迎訊息：userId={}", lineUserId);
+        } catch (Exception e) {
+            log.warn("發送歡迎訊息失敗：userId={}, error={}", lineUserId, e.getMessage());
+        }
     }
 
     /**

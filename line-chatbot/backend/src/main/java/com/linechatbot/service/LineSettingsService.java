@@ -73,6 +73,11 @@ public class LineSettingsService {
         if (dto.getGreetingEnabled() != null) {
             config.setGreetingEnabled(dto.getGreetingEnabled());
         }
+        // null = 不更新；空字串 = 清除
+        if (dto.getGreetingMessage() != null) {
+            String msg = dto.getGreetingMessage().trim();
+            config.setGreetingMessage(msg.isEmpty() ? null : msg);
+        }
 
         LineChannelConfig saved = configRepository.save(config);
         log.info("LINE 頻道設定已更新");
@@ -122,6 +127,7 @@ public class LineSettingsService {
         dto.setWebhookEnabled(config.getWebhookEnabled() != null ? config.getWebhookEnabled() : true);
         dto.setAutoReplyEnabled(config.getAutoReplyEnabled() != null ? config.getAutoReplyEnabled() : false);
         dto.setGreetingEnabled(config.getGreetingEnabled() != null ? config.getGreetingEnabled() : true);
+        dto.setGreetingMessage(config.getGreetingMessage());
         dto.setUpdatedAt(config.getUpdatedAt());
 
         boolean configured = StringUtils.hasText(config.getChannelSecret())

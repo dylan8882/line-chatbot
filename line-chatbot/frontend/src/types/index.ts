@@ -97,6 +97,8 @@ export interface LineChannelConfig {
   webhookEnabled: boolean
   autoReplyEnabled: boolean
   greetingEnabled: boolean
+  /** 加入好友歡迎訊息內容（純文字、可為 null） */
+  greetingMessage: string | null
   updatedAt: string | null
 }
 
@@ -111,6 +113,8 @@ export interface LineChannelConfigUpdate {
   webhookEnabled?: boolean
   autoReplyEnabled?: boolean
   greetingEnabled?: boolean
+  /** null = 不更新；空字串 = 清除 */
+  greetingMessage?: string | null
 }
 
 // ── AI 串接設定（Phase 8） ────────────────────────────────────────

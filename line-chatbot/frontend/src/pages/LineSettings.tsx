@@ -45,6 +45,7 @@ interface FormValues {
   webhookEnabled: boolean
   autoReplyEnabled: boolean
   greetingEnabled: boolean
+  greetingMessage: string
 }
 
 export default function LineSettings() {
@@ -76,6 +77,7 @@ export default function LineSettings() {
         webhookEnabled: data.webhookEnabled,
         autoReplyEnabled: data.autoReplyEnabled,
         greetingEnabled: data.greetingEnabled,
+        greetingMessage: data.greetingMessage ?? '',
       })
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '載入設定失敗')
@@ -96,6 +98,8 @@ export default function LineSettings() {
         webhookEnabled: values.webhookEnabled,
         autoReplyEnabled: values.autoReplyEnabled,
         greetingEnabled: values.greetingEnabled,
+        // 永遠傳值：空字串會被後端視為「清除」，有內容才存
+        greetingMessage: values.greetingMessage ?? '',
       }
       const res = await saveLineSettings(payload)
       setConfig(res.data.data)
@@ -194,6 +198,7 @@ export default function LineSettings() {
           webhookEnabled: true,
           autoReplyEnabled: false,
           greetingEnabled: true,
+          greetingMessage: '',
         }}
       >
         {/* ── Basic settings ──────────────────────────────────────────── */}
@@ -353,15 +358,29 @@ export default function LineSettings() {
 
           <Form.Item
             label={
-              <Tooltip title="LINE OA Manager → 回應設定 → 加入好友歡迎訊息">
+              <Tooltip title="使用者加入好友時，Follow webhook 處理後 push 此訊息">
                 <span>加入好友歡迎訊息（Greeting）</span>
               </Tooltip>
             }
             name="greetingEnabled"
             valuePropName="checked"
-            extra="使用者加入好友時是否發送歡迎訊息。"
+            extra="開啟後，新加好友時系統會 push 下方訊息（純文字）。"
           >
             <Switch checkedChildren="啟用" unCheckedChildren="停用" />
+          </Form.Item>
+
+          <Form.Item
+            label="歡迎訊息內容"
+            name="greetingMessage"
+            extra="純文字，最多 500 字；清空後儲存代表停用文字內容（即使 Greeting 開關仍啟用）。"
+            rules={[{ max: 500, message: '訊息最多 500 字' }]}
+          >
+            <Input.TextArea
+              rows={4}
+              placeholder="例：嗨～感謝加入我們！輸入「你好」可以開始對話喔！"
+              maxLength={500}
+              showCount
+            />
           </Form.Item>
         </Card>
 
@@ -420,6 +439,13 @@ export default function LineSettings() {
               {config.greetingEnabled
                 ? <Tag color="blue">啟用</Tag>
                 : <Tag color="default">停用</Tag>}
+              {config.greetingMessage && (
+                <Text style={{ marginLeft: 8 }} type="secondary">
+                  「{config.greetingMessage.length > 40
+                    ? config.greetingMessage.slice(0, 40) + '…'
+                    : config.greetingMessage}」
+                </Text>
+              )}
             </Descriptions.Item>
             {config.updatedAt && (
               <Descriptions.Item label="最後更新">

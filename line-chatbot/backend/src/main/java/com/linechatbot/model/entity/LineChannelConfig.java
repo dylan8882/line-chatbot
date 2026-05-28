@@ -74,6 +74,13 @@ public class LineChannelConfig {
     @Builder.Default
     private Boolean greetingEnabled = true;
 
+    /**
+     * 加入好友歡迎訊息內容（純文字、≤ 500 字）。
+     * Follow 事件處理時若 greetingEnabled 且本欄位非空，透過 push API 發送給用戶。
+     */
+    @Column(name = "greeting_message", length = 500)
+    private String greetingMessage;
+
     @LastModifiedDate
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;

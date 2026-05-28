@@ -81,6 +81,12 @@ public class LineChannelConfigDTO {
      */
     private Boolean greetingEnabled;
 
+    /**
+     * 加入好友歡迎訊息內容（純文字）。
+     * GET：回傳當前內容、PUT：null = 不更新、空字串 = 清除。
+     */
+    private String greetingMessage;
+
     /** 最後更新時間 */
     private LocalDateTime updatedAt;
 }
