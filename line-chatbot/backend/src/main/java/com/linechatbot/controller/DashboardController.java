@@ -28,7 +28,7 @@ public class DashboardController {
     private final MessageLogRepository messageLogRepository;
 
     /**
-     * 今日統計摘要
+     * 今日統計摘要 + 近 7 天訊息量趨勢（一個端點包兩種資料給 Dashboard 用）。
      * GET /api/dashboard/stats
      */
     @GetMapping("/stats")
@@ -44,6 +44,10 @@ public class DashboardController {
 
         double qaHitRate = total > 0 ? (double) qaHits / total * 100 : 0;
 
+        // 近 7 天趨勢（Dashboard 圖表用）
+        LocalDateTime sevenDaysAgo = LocalDateTime.of(LocalDate.now().minusDays(6), LocalTime.MIDNIGHT);
+        List<UsageStatsDTO.DailyStats> dailyStats = loadDailyStats(sevenDaysAgo);
+
         UsageStatsDTO stats = UsageStatsDTO.builder()
                 .totalMessages(total)
                 .qaHits(qaHits)
@@ -51,6 +55,7 @@ public class DashboardController {
                 .noReply(noReply)
                 .qaHitRate(Math.round(qaHitRate * 10.0) / 10.0)
                 .avgLatencyMs(avgLatency != null ? Math.round(avgLatency * 10.0) / 10.0 : 0.0)
+                .dailyStats(dailyStats)
                 .build();
 
         return ResponseEntity.ok(Map.of(
@@ -58,6 +63,21 @@ public class DashboardController {
                 "data", stats,
                 "message", "查詢成功"
         ));
+    }
+
+    /** 共用：把 native query 結果 map 成 DTO 列表 */
+    private List<UsageStatsDTO.DailyStats> loadDailyStats(LocalDateTime since) {
+        List<Object[]> rawStats = messageLogRepository.findDailyStatsSince(since);
+        List<UsageStatsDTO.DailyStats> dailyStats = new ArrayList<>();
+        for (Object[] row : rawStats) {
+            dailyStats.add(UsageStatsDTO.DailyStats.builder()
+                    .date(((java.sql.Date) row[0]).toLocalDate())
+                    .messageCount(((Number) row[1]).longValue())
+                    .qaCount(((Number) row[2]).longValue())
+                    .aiCount(((Number) row[3]).longValue())
+                    .build());
+        }
+        return dailyStats;
     }
 
     /**
@@ -70,21 +90,9 @@ public class DashboardController {
         LocalDateTime since = LocalDateTime.of(
                 LocalDate.now().minusDays(days - 1), LocalTime.MIDNIGHT);
 
-        List<Object[]> rawStats = messageLogRepository.findDailyStatsSince(since);
-        List<UsageStatsDTO.DailyStats> dailyStats = new ArrayList<>();
-
-        for (Object[] row : rawStats) {
-            dailyStats.add(UsageStatsDTO.DailyStats.builder()
-                    .date(((java.sql.Date) row[0]).toLocalDate())
-                    .messageCount(((Number) row[1]).longValue())
-                    .qaCount(((Number) row[2]).longValue())
-                    .aiCount(((Number) row[3]).longValue())
-                    .build());
-        }
-
         return ResponseEntity.ok(Map.of(
                 "success", true,
-                "data", dailyStats,
+                "data", loadDailyStats(since),
                 "message", "查詢成功"
         ));
     }

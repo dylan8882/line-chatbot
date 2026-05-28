@@ -113,7 +113,7 @@ export default function Dashboard() {
           <Card>
             <Statistic
               title="QA 命中率"
-              value={((stats?.qaHitRate ?? 0) * 100).toFixed(1)}
+              value={(stats?.qaHitRate ?? 0).toFixed(1)}
               suffix="%"
               prefix={<CheckCircleOutlined style={{ color: '#52c41a' }} />}
             />
