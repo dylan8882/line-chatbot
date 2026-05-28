@@ -24,7 +24,8 @@ const greeting = [
       type: 'bubble',
       hero: {
         type: 'image',
-        url: 'https://picsum.photos/seed/greeting/1024/512',
+        // 紅包 + 金幣，主題明確的新春元素（Unsplash 公共圖庫）
+        url: 'https://images.unsplash.com/photo-1642860993104-1ffed34d4170?w=1024&q=80',
         size: 'full',
         aspectRatio: '20:13',
         aspectMode: 'cover',
@@ -56,7 +57,8 @@ const product = [
       type: 'bubble',
       hero: {
         type: 'image',
-        url: 'https://picsum.photos/seed/product/1024/682',
+        // 美式咖啡杯，符合預設模板「經典美式咖啡」主題（Unsplash 公共圖庫）
+        url: 'https://images.unsplash.com/photo-1497515114629-f71d768fd07c?w=1024&q=80',
         size: 'full',
         aspectRatio: '3:2',
         aspectMode: 'cover',
