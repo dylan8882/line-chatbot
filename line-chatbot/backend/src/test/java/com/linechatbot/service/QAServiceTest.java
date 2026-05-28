@@ -11,6 +11,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.Optional;
@@ -112,8 +114,8 @@ class QAServiceTest {
     }
 
     @Test
-    @DisplayName("新增 QA 後應清除 Cache")
-    void createQA_shouldEvictCache() {
+    @DisplayName("新增 QA：無 transaction 同步上下文時立即 evict（fallback 路徑）")
+    void createQA_noTxSync_evictsImmediately() {
         when(qaRepository.save(any())).thenReturn(buildQA("test", "CONTAINS"));
         var dto = new com.linechatbot.model.dto.QAPairDTO();
         dto.setKeyword("test");
@@ -123,6 +125,34 @@ class QAServiceTest {
         qaService.createQA(dto);
 
         verify(redisTemplate).delete("qa:list");
+    }
+
+    @Test
+    @DisplayName("新增 QA：有 transaction 同步時 evict 延後到 afterCommit")
+    void createQA_withTxSync_evictsAfterCommit() {
+        when(qaRepository.save(any())).thenReturn(buildQA("test", "CONTAINS"));
+        var dto = new com.linechatbot.model.dto.QAPairDTO();
+        dto.setKeyword("test");
+        dto.setAnswer("回答");
+        dto.setMatchType("CONTAINS");
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            qaService.createQA(dto);
+
+            // commit 前不該 evict（避免 race：並發讀會把未 commit 的舊資料塞回 cache）
+            verify(redisTemplate, never()).delete("qa:list");
+
+            // 模擬 transaction commit 觸發 afterCommit callback
+            for (TransactionSynchronization sync : TransactionSynchronizationManager.getSynchronizations()) {
+                sync.afterCommit();
+            }
+
+            // commit 後 evict 才真正執行
+            verify(redisTemplate).delete("qa:list");
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     private QAPair buildQA(String keyword, String matchType) {

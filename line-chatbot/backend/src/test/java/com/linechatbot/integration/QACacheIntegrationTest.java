@@ -4,6 +4,7 @@ import com.linechatbot.model.dto.QAPairDTO;
 import com.linechatbot.model.entity.QAPair;
 import com.linechatbot.repository.QARepository;
 import com.linechatbot.service.QAService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -44,6 +45,16 @@ class QACacheIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        redisTemplate.delete(QA_CACHE_KEY);
+    }
+
+    /**
+     * 整合測試會把 fake QAPair 寫進真實 Redis（透過 mock 的 QARepository + 真實 cache 寫入），
+     * 跑完不清會污染 dev 環境的 Redis，導致下次 findMatchingQA 拿到測試 fixture。
+     * dev 與 test 共用同一個 Redis instance，故必須在測試結束時清乾淨。
+     */
+    @AfterEach
+    void tearDown() {
         redisTemplate.delete(QA_CACHE_KEY);
     }
 
