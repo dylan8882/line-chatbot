@@ -21,7 +21,7 @@ import {
   Typography,
   message,
 } from 'antd'
-import { ReloadOutlined, StopOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import { ExperimentOutlined, ReloadOutlined, StopOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -254,6 +254,14 @@ export default function BroadcastDetail() {
               取消任務
             </Button>
           </Popconfirm>
+        )}
+        {task.abTestId && (
+          <Button
+            icon={<ExperimentOutlined />}
+            onClick={() => navigate(`/broadcasts/ab-test/${task.abTestId}`)}
+          >
+            查看 A/B 比較
+          </Button>
         )}
       </Space>
 
