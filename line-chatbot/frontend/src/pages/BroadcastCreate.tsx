@@ -1,7 +1,4 @@
-/**
- * 建立推播任務
- * 流程：選擇訊息來源（模板或自訂 JSON）→ 選擇目標 → 預估收件人數 → 建立 → 立刻送出 or 留草稿
- */
+/** 建立推播：選訊息來源、目標、API 模式 → 預估 → 草稿 / 直接送出。 */
 import { useEffect, useMemo, useState } from 'react'
 import {
   Alert,
@@ -26,6 +23,7 @@ import { getMessageTemplates } from '../api/messageTemplates'
 import { getTags } from '../api/tags'
 import TagPicker from '../components/Tags/TagPicker'
 import FlexPreview from '../components/FlexEditor/FlexPreview'
+import ImportFromSimulator from '../components/FlexEditor/ImportFromSimulator'
 import LineUserPicker from '../components/Broadcast/LineUserPicker'
 import type {
   BroadcastCreateRequest,
@@ -73,7 +71,6 @@ export default function BroadcastCreate() {
   const [testOpen, setTestOpen] = useState(false)
   const [testUserId, setTestUserId] = useState('')
   const [draftId, setDraftId] = useState<number | null>(null)
-  // 從 LineUsers 頁帶過來的預載用戶物件
   const [initialUsers] = useState<LineUser[]>(initialState?.users ?? [])
 
   useEffect(() => {
@@ -90,7 +87,6 @@ export default function BroadcastCreate() {
     })
   }, [form, initialState])
 
-  /** 將表單值轉為後端 CreateRequest */
   const buildRequest = (values: FormValues): BroadcastCreateRequest => ({
     name: values.name,
     templateId: values.messageSource === 'TEMPLATE' ? values.templateId : undefined,
@@ -185,7 +181,6 @@ export default function BroadcastCreate() {
     [templates],
   )
 
-  /** 根據目前輸入決定預覽用的 JSON 字串 */
   const previewContent = useMemo(() => {
     if (messageSource === 'TEMPLATE' && templateId) {
       return templates.find((t) => t.id === templateId)?.content ?? ''
@@ -223,17 +218,24 @@ export default function BroadcastCreate() {
                   <Select options={templateOptions} placeholder="選擇模板" />
                 </Form.Item>
               ) : (
-                <Form.Item
-                  name="messageContent"
-                  label="messages JSON 陣列"
-                  rules={[{ required: true, message: '請輸入訊息內容' }]}
-                >
-                  <TextArea
-                    rows={14}
-                    style={{ fontFamily: 'monospace', fontSize: 12 }}
-                    placeholder='[{"type":"text","text":"..."}]'
-                  />
-                </Form.Item>
+                <>
+                  <div style={{ marginBottom: 8 }}>
+                    <ImportFromSimulator
+                      onImport={(wrapped) => form.setFieldValue('messageContent', wrapped)}
+                    />
+                  </div>
+                  <Form.Item
+                    name="messageContent"
+                    label="messages JSON 陣列"
+                    rules={[{ required: true, message: '請輸入訊息內容' }]}
+                  >
+                    <TextArea
+                      rows={14}
+                      style={{ fontFamily: 'monospace', fontSize: 12 }}
+                      placeholder='[{"type":"text","text":"..."}]'
+                    />
+                  </Form.Item>
+                </>
               )}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>

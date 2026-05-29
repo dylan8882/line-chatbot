@@ -16,6 +16,7 @@ import {
 } from '@ant-design/icons'
 import type { UploadProps } from 'antd'
 import FlexPreview from './FlexPreview'
+import ImportFromSimulator from './ImportFromSimulator'
 import PresetPicker from './PresetPicker'
 import type { Preset } from './presets'
 
@@ -103,6 +104,7 @@ export default function FlexEditor({ value, onChange, onPresetTypeChange, height
         <Button icon={<DownloadOutlined />} onClick={handleExport} disabled={!!jsonValid}>
           匯出 JSON
         </Button>
+        <ImportFromSimulator onImport={onChange} />
         <Tooltip title="在 LINE 官方 Simulator 預覽 / 編輯">
           <a href="https://developers.line.biz/flex-simulator/" target="_blank" rel="noreferrer">
             <Button icon={<EyeOutlined />} type="link">
