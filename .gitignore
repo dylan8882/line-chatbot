@@ -1,13 +1,39 @@
-# Logs
-*.log
-
-# Frontend
-node_modules/
+# ── Build artifacts ──
+target/
+*.class
 dist/
 .vite/
+node_modules/
+*.tsbuildinfo
 
-# IDE / OS
+# Vite / TS 自動產生的 noise（vite.config.ts 才是 source）
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# ── Logs ──
+*.log
+
+# ── 環境變數與機密（絕對不能進版控）──
+.env
+.env.local
+.env.*.local
+
+# ── IDE / OS ──
 .idea/
 .vscode/
 .DS_Store
 *.iml
+*.swp
+*~
+
+# ── 個人 / 私有檔案（自己用、不公開）──
+.claude/
+CLAUDE.md
+SPEC.md
+scripts/
+
+# ── docs/ 個人筆記（公開部分白名單放行）──
+docs/**/*.md
+!docs/architecture.md
+!docs/README.md
+docs/img/.DS_Store
