@@ -30,10 +30,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * LINE 用戶資料服務
- * - Follow / Unfollow 事件時的 upsert
- * - 收到訊息時的活躍度更新
- * - 後台查詢、標籤指派
+ * LINE 用戶資料服務：Follow/Unfollow 事件 upsert、活躍度更新、後台查詢與標籤指派。
  */
 @Service
 @RequiredArgsConstructor
@@ -45,9 +42,7 @@ public class LineUserService {
     private final MessagingApiClient messagingApiClient;
     private final LineChannelConfigRepository channelConfigRepository;
 
-    /**
-     * Follow 事件處理：建立或重新啟用用戶，並嘗試抓取 LINE Profile。
-     */
+    /** 建立或重新啟用用戶（block→unblock 再 follow 的場景），並抓取 LINE Profile。 */
     @Transactional
     public LineUser onFollow(String lineUserId) {
         LineUser user = lineUserRepository.findByLineUserId(lineUserId)
@@ -70,6 +65,10 @@ public class LineUserService {
      * 若 LineChannelConfig.greetingEnabled = true 且 greetingMessage 非空，
      * 透過 pushMessage 發送歡迎訊息。
      * 例外吞掉只記 warn，避免影響 Follow 事件主流程（DB 已存）。
+     *
+     * <p>retry key 用隨機 UUID 而非 deterministic：每次 follow 都應該獨立發送，
+     * 不可去重（用戶 block + unblock 後 LINE 視為新 follow，理應再收到歡迎訊息）。
+     * Deterministic key 會導致同 user 第二次起 LINE 回 409 "retry key already accepted"。
      */
     private void sendGreetingIfConfigured(String lineUserId) {
         try {
@@ -79,8 +78,7 @@ public class LineUserService {
                     || !StringUtils.hasText(config.getGreetingMessage())) {
                 return;
             }
-            UUID retryKey = UUID.nameUUIDFromBytes(("greeting-" + lineUserId).getBytes());
-            messagingApiClient.pushMessage(retryKey, new PushMessageRequest(
+            messagingApiClient.pushMessage(UUID.randomUUID(), new PushMessageRequest(
                     lineUserId,
                     List.of(new TextMessage(config.getGreetingMessage())),
                     false,
@@ -92,9 +90,7 @@ public class LineUserService {
         }
     }
 
-    /**
-     * Unfollow 事件處理：標記為 BLOCKED，保留歷史資料。
-     */
+    /** 標記為 BLOCKED 但保留 row，方便後續分析退追時點 / 退追前互動。 */
     @Transactional
     public void onUnfollow(String lineUserId) {
         lineUserRepository.findByLineUserId(lineUserId).ifPresent(user -> {
@@ -104,9 +100,7 @@ public class LineUserService {
         });
     }
 
-    /**
-     * 收到訊息時呼叫：若用戶不存在則建立，並更新 last_message_at。
-     */
+    /** 更新 last_message_at；用戶不存在時補建（兜底 follow 事件遺失的情況）。 */
     @Transactional
     public void touchOnMessage(String lineUserId) {
         LineUser user = lineUserRepository.findByLineUserId(lineUserId)
@@ -137,9 +131,7 @@ public class LineUserService {
         return lineUserRepository.search(kw, st, tags, pageable).map(this::toDTO);
     }
 
-    /**
-     * 指派標籤到單一用戶（覆寫式：以傳入的 tagIds 為準）。
-     */
+    /** 覆寫式：完全以傳入 tagIds 為準，會刷新 user_count。 */
     @Transactional
     public LineUserDTO assignTags(Long userId, List<Long> tagIds) {
         LineUser user = lineUserRepository.findById(userId)
@@ -160,9 +152,6 @@ public class LineUserService {
         return toDTO(user);
     }
 
-    /**
-     * 批量貼 / 移除標籤（ADD / REMOVE）。
-     */
     @Transactional
     public int bulkTag(BulkTagRequest req) {
         List<LineUser> users = lineUserRepository.findAllById(req.getUserIds());
@@ -186,10 +175,7 @@ public class LineUserService {
         return affected;
     }
 
-    /**
-     * 取得單一用戶。
-     * 同理需要 transaction 才能 lazy load tags。
-     */
+    /** readOnly transaction：DTO 轉換需要 lazy load tags，session 必須還活著。 */
     @Transactional(readOnly = true)
     public LineUserDTO getById(Long id) {
         return lineUserRepository.findById(id)
@@ -199,9 +185,7 @@ public class LineUserService {
 
     // ── 私有方法 ──────────────────────────────────────────────────────────────
 
-    /**
-     * 呼叫 LINE Profile API 補充顯示名稱、頭像等資訊；失敗時不阻塞主流程。
-     */
+    /** 抓 LINE Profile 補欄位；失敗時只記 warn、不阻塞主流程（DB upsert 仍要成功）。 */
     private void enrichProfile(LineUser user) {
         try {
             UserProfileResponse profile = messagingApiClient.getProfile(user.getLineUserId())
