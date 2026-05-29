@@ -153,6 +153,52 @@ class ClickLinkRewriterTest {
     }
 
     @Test
+    @DisplayName("URL 已是自家 tracking link → 先 unwrap 回原始 target 再重新包，不會多包一層")
+    void rewrite_alreadyWrappedUrl_unwrapsBeforeRewrap() throws Exception {
+        givenBaseUrl("https://cb.example.com");
+        // 模擬上一輪同個 task 的 ClickLink：token=OLDTOKEN 對應 https://www.google.com/
+        ClickLink prev = ClickLink.builder()
+                .id(99L).taskId(10L).linkIndex(0)
+                .targetUrl("https://www.google.com/")
+                .token("OLDTOKEN")
+                .build();
+        when(linkRepository.findByToken("OLDTOKEN")).thenReturn(Optional.of(prev));
+
+        // 新 task 的 messageContent 含上一輪包好的 /c/OLDTOKEN
+        String content = simpleButton("https://cb.example.com/c/OLDTOKEN");
+
+        String out = rewriter.rewriteForTask(11L, content);
+
+        // 寫進新 task 的 click_link，target_url 應為原始 google.com（不是 ngrok 那串）
+        ArgumentCaptor<ClickLink> captor = ArgumentCaptor.forClass(ClickLink.class);
+        verify(linkRepository).save(captor.capture());
+        ClickLink saved = captor.getValue();
+        assertThat(saved.getTaskId()).isEqualTo(11L);
+        assertThat(saved.getTargetUrl()).isEqualTo("https://www.google.com/");
+        assertThat(saved.getToken()).isNotEqualTo("OLDTOKEN");
+
+        // 改寫後的 uri 應是新 token，不是舊的 /c/OLDTOKEN
+        JsonNode tree = objectMapper.readTree(out);
+        String uri = tree.get(0).get("contents").get("footer").get("contents")
+                .get(0).get("action").get("uri").asText();
+        assertThat(uri).startsWith("https://cb.example.com/c/");
+        assertThat(uri).doesNotEndWith("/OLDTOKEN");
+    }
+
+    @Test
+    @DisplayName("自家 tracking link 反查不到 token → 維持原 URL 並照 shouldRewrite 流程處理（不會 NPE）")
+    void rewrite_orphanTrackingUrl_doesNotCrash() {
+        givenBaseUrl("https://cb.example.com");
+        when(linkRepository.findByToken("GHOST")).thenReturn(Optional.empty());
+        String content = simpleButton("https://cb.example.com/c/GHOST");
+
+        // 不該 throw；GHOST 找不到原始 target，仍會被當成「自家 URL」再包一層
+        // （這是退化行為，正常運轉不會發生；測試只保證不會 crash）
+        rewriter.rewriteForTask(99L, content);
+        verify(linkRepository).findByToken("GHOST");
+    }
+
+    @Test
     @DisplayName("純文字訊息無 button 時不改寫、不寫 click_link")
     void rewrite_textOnlyMessage_noChange() {
         givenBaseUrl("https://cb.example.com");

@@ -39,11 +39,7 @@ public class ClickLinkRewriter {
     private final LineChannelConfigRepository channelConfigRepository;
     private final ObjectMapper objectMapper;
 
-    /**
-     * 改寫一個 task 的 messageContent，回傳新 JSON 字串。
-     *
-     * @return 改寫後 JSON；若無可改寫 URL 或 serverBaseUrl 未設定則回傳原樣
-     */
+    /** @return 改寫後 JSON；無可改寫 URL 或未設定 serverBaseUrl 時原樣回傳 */
     public String rewriteForTask(Long taskId, String messageContent) {
         String baseUrl = serverBaseUrl();
         if (!StringUtils.hasText(baseUrl)) {
@@ -75,19 +71,16 @@ public class ClickLinkRewriter {
             // type=uri 動作（button.action / image.action / 等都有相同結構）
             if ("uri".equals(text(node, "type")) && node.has("uri")) {
                 String original = node.get("uri").asText();
-                if (shouldRewrite(original)) {
-                    String token = createLink(taskId, linkIndex.getAndIncrement(), original);
+                // 若 URL 本身就是「上一輪我自己包過的 tracking URL」，先 unwrap 還原成原始目標，
+                // 否則複製舊推播當模板會變成「包了又包」，DB 多一筆無意義 ClickLink。
+                String resolved = resolveOriginalUrl(original, baseUrl);
+                if (shouldRewrite(resolved)) {
+                    String token = createLink(taskId, linkIndex.getAndIncrement(), resolved);
                     ((ObjectNode) node).put("uri", baseUrl + "/c/" + token);
                     count++;
                 }
             }
-            node.fields().forEachRemaining(e -> {
-                // 已處理 uri 字串本身，不需要再遞迴進去
-                if (!"uri".equals(e.getKey()) && !"type".equals(e.getKey())) {
-                    // visit child — but can't easily accumulate count via lambda; do directly
-                }
-            });
-            // 重新遞迴所有子節點（不靠 lambda 累加）
+            // 用 iterator 而不是 forEachRemaining：lambda 不能在外部 mutate counter
             var it = node.fields();
             while (it.hasNext()) {
                 var e = it.next();
@@ -97,6 +90,23 @@ public class ClickLinkRewriter {
             }
         }
         return count;
+    }
+
+    /**
+     * 若 url 是「我自己之前包過的 tracking URL」（{baseUrl}/c/{token}），
+     * 反查 click_links 拿回原始 target_url。
+     *
+     * <p>遞迴解一次以上的包裝（理論上不會發生，但若 baseUrl 變動可能殘存舊資料）。
+     * 找不到 token 對應的 ClickLink → 回原 url，讓 {@link #shouldRewrite} 自然走後續判斷。
+     */
+    private String resolveOriginalUrl(String url, String baseUrl) {
+        String prefix = baseUrl + "/c/";
+        if (url == null || !url.startsWith(prefix)) return url;
+        String token = url.substring(prefix.length());
+        return linkRepository.findByToken(token)
+                .map(ClickLink::getTargetUrl)
+                .map(target -> resolveOriginalUrl(target, baseUrl))
+                .orElse(url);
     }
 
     private boolean shouldRewrite(String url) {
