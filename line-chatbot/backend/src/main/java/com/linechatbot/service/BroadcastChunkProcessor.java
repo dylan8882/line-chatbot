@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -73,7 +74,7 @@ public class BroadcastChunkProcessor {
 
         boolean isPush = "PUSH".equals(task.getApiMode());
 
-        // 依模式取對應 token（最多等 30 秒）
+        // 最多等 30 秒
         boolean acquired = isPush
                 ? rateLimiter.acquirePush(30_000)
                 : rateLimiter.acquireMulticast(30_000);
@@ -112,24 +113,37 @@ public class BroadcastChunkProcessor {
                     .multicast(retryKey, new MulticastRequest(messages, recipients, false, null))
                     .get();
 
-            chunk.setStatus("SUCCESS");
-            chunk.setLineRequestId(result.requestId());
-            chunk.setSentAt(LocalDateTime.now());
-            chunk.setErrorCode(null);
-            chunk.setErrorMessage(null);
-            chunk.setNextRetryAt(null);
-            chunkRepository.save(chunk);
-
-            boolean isLast = counterService.recordChunkResult(
-                    task.getId(), recipients.size(), recipients.size(), 0);
-            if (isLast) counterService.finalizeTask(task.getId());
-
-            log.info("Chunk multicast 成功：chunkId={}, taskId={}, recipients={}, requestId={}",
-                    chunk.getId(), task.getId(), recipients.size(), result.requestId());
+            markMulticastSuccess(chunk, task, recipients.size(), result.requestId());
 
         } catch (Exception e) {
+            // 409「retry key already accepted」：LINE 端先前已成功接受同一 retry key 的請求，
+            // 訊息已實際送達，本次 409 不代表失敗，視同成功。
+            if (isRetryKeyAlreadyAccepted(e)) {
+                String acceptedId = extractAcceptedRequestId(e);
+                log.warn("Multicast retry key 已被接受（視同成功）：chunkId={}, acceptedRequestId={}",
+                        chunk.getId(), acceptedId);
+                markMulticastSuccess(chunk, task, recipients.size(), acceptedId);
+                return;
+            }
             handleFailure(chunk, recipients.size(), task.getId(), e);
         }
+    }
+
+    private void markMulticastSuccess(BroadcastChunk chunk, BroadcastTask task, int recipientCount, String requestId) {
+        chunk.setStatus("SUCCESS");
+        chunk.setLineRequestId(requestId);
+        chunk.setSentAt(LocalDateTime.now());
+        chunk.setErrorCode(null);
+        chunk.setErrorMessage(null);
+        chunk.setNextRetryAt(null);
+        chunkRepository.save(chunk);
+
+        boolean isLast = counterService.recordChunkResult(
+                task.getId(), recipientCount, recipientCount, 0);
+        if (isLast) counterService.finalizeTask(task.getId());
+
+        log.info("Chunk multicast 成功：chunkId={}, taskId={}, recipients={}, requestId={}",
+                chunk.getId(), task.getId(), recipientCount, requestId);
     }
 
     /**
@@ -165,7 +179,15 @@ public class BroadcastChunkProcessor {
                 success++;
                 lastRequestId = result.requestId();
             } catch (Exception e) {
-                if (isClient4xx(e)) {
+                // 409「retry key already accepted」：LINE 端視為「已送達」，本次 409 不是失敗。
+                // 對應 use case：worker crash 後 dead-letter 重試、或同 chunk 在 24h 內被重送。
+                if (isRetryKeyAlreadyAccepted(e)) {
+                    success++;
+                    String acceptedId = extractAcceptedRequestId(e);
+                    if (acceptedId != null) lastRequestId = acceptedId;
+                    log.warn("Push retry key 已被接受（視同成功）：chunkId={}, userId={}, acceptedRequestId={}",
+                            chunk.getId(), maskUser(userId), acceptedId);
+                } else if (isClient4xx(e)) {
                     failed++;
                     log.debug("Push 4xx，標記個別 user failed：chunkId={}, userId={}, err={}",
                             chunk.getId(), maskUser(userId), e.getMessage());
@@ -206,20 +228,15 @@ public class BroadcastChunkProcessor {
     }
 
     /**
-     * 判定 exception 是否為 LINE 回 4xx 的「永久性錯誤」（不重試）。
-     * <p>LINE SDK 把 HTTP error 包成 {@link AbstractLineClientException}，內含 {@code getCode()}，
-     * 4xx 視為使用者端錯誤（已退追、無效 ID、訊息格式錯等），直接標記該 user failed 不重試；
-     * 其他 exception 視為 transient（網路抖動、5xx 等），走 chunk 重試流程。
-     *
-     * <p>不細分 408/429：在 push 模式下，這兩種 4xx 若立刻重試也只會再觸發；
-     * 真正大量 429 應該由 {@link com.linechatbot.service.ratelimit.LineApiRateLimiter} 預防。
+     * 4xx 視為永久性錯誤、標記該 user failed 不重試；5xx 與網路錯走 chunk 重試。
+     * 409 排除（retry key 已接受 = 已送達），由 {@link #isRetryKeyAlreadyAccepted} 處理。
      */
     private boolean isClient4xx(Exception e) {
         Throwable t = e;
         while (t != null) {
             if (t instanceof AbstractLineClientException lex) {
                 int code = lex.getCode();
-                if (code >= 400 && code < 500) {
+                if (code >= 400 && code < 500 && code != 409) {
                     return true;
                 }
             }
@@ -228,13 +245,56 @@ public class BroadcastChunkProcessor {
         return false;
     }
 
+    /**
+     * 判定 exception 是否為「retry key 已被 LINE 接受過」的 409。
+     * <p>語意：先前同一個 retry key 已送出且 LINE 已實際處理（訊息已寄達），
+     * 本次只是冪等防呆，不應算失敗。對應 use case：worker crash 後 dead-letter 重試、
+     * scheduleRetry 與真實重複請求碰撞、或同 chunk 在 24h 內因 ID/attempts/userId 相同造成 key 撞庫。
+     */
+    private boolean isRetryKeyAlreadyAccepted(Exception e) {
+        Throwable t = e;
+        while (t != null) {
+            if (t instanceof AbstractLineClientException lex && lex.getCode() == 409) {
+                return true;
+            }
+            t = t.getCause();
+        }
+        return false;
+    }
+
+    /**
+     * 從 409 例外中讀出 LINE 回的 {@code x-line-accepted-request-id}（即「先前已接受的 request id」），
+     * 寫進 chunk.lineRequestId 當作這次的依據。讀不到時回 null（caller 自行 fallback）。
+     */
+    private String extractAcceptedRequestId(Exception e) {
+        Throwable t = e;
+        while (t != null) {
+            if (t instanceof AbstractLineClientException lex) {
+                return lex.getHeader("x-line-accepted-request-id");
+            }
+            t = t.getCause();
+        }
+        return null;
+    }
+
     private String maskUser(String userId) {
         if (userId == null || userId.length() < 8) return userId;
         return userId.substring(0, 4) + "***" + userId.substring(userId.length() - 4);
     }
 
+    /**
+     * 推算 push 模式 per-user retry key。
+     *
+     * <p>seed 含 chunk.createdAt：避免 chunk_id 被重用（清資料、DB 還原備份、跨環境共用同個 LINE channel）
+     * 時，落在 LINE retry key 24h 視窗內的舊 key 撞庫導致 409。
+     *
+     * <p>同一 chunk 同一 attempt 仍會得到同樣 key（重試時的冪等性還在）。
+     */
     private UUID derivePushRetryKey(BroadcastChunk chunk, String userId) {
-        String seed = "broadcast-" + chunk.getId() + "-" + chunk.getAttempts() + "-" + userId;
+        String seed = "broadcast-" + chunk.getId()
+                + "-" + chunkCreatedMillis(chunk)
+                + "-" + chunk.getAttempts()
+                + "-" + userId;
         return UUID.nameUUIDFromBytes(seed.getBytes());
     }
 
@@ -293,9 +353,23 @@ public class BroadcastChunkProcessor {
         }
     }
 
+    /**
+     * 推算 multicast 模式整批 retry key。理由同 {@link #derivePushRetryKey}。
+     */
     private UUID deriveRetryKey(BroadcastChunk chunk) {
-        String seed = "broadcast-" + chunk.getId() + "-" + chunk.getAttempts();
+        String seed = "broadcast-" + chunk.getId()
+                + "-" + chunkCreatedMillis(chunk)
+                + "-" + chunk.getAttempts();
         return UUID.nameUUIDFromBytes(seed.getBytes());
+    }
+
+    /**
+     * 取 chunk.createdAt 的 epoch millis（UTC）。null 視為 0L 作為 fallback。
+     * <p>正常流程下 createdAt 是 DB 預設值，不會是 null；只有單元測試手刻 entity 才會碰到。
+     */
+    private long chunkCreatedMillis(BroadcastChunk chunk) {
+        LocalDateTime createdAt = chunk.getCreatedAt();
+        return createdAt != null ? createdAt.toInstant(ZoneOffset.UTC).toEpochMilli() : 0L;
     }
 
     private String truncate(String s, int max) {

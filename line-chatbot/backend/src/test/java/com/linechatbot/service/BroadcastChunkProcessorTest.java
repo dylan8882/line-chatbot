@@ -20,6 +20,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -34,6 +35,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -181,6 +183,82 @@ class BroadcastChunkProcessorTest {
         assertThat(keys.get(0)).isNotEqualTo(keys.get(1));
     }
 
+    @Test
+    @DisplayName("PUSH：同 chunkId 不同 createdAt → retry key 也不同（防 chunk_id 被 truncate 重用後撞庫）")
+    void push_retryKey_includesCreatedAt() {
+        // 第一個「世代」的 chunk 16
+        BroadcastChunk firstGen = makeChunk(16L, 100L, List.of("Usame"));
+        firstGen.setCreatedAt(LocalDateTime.of(2026, 5, 28, 10, 0, 0));
+        BroadcastTask firstTask = makeTask(100L, "PUSH");
+        when(chunkRepository.findById(16L)).thenReturn(Optional.of(firstGen));
+        when(taskRepository.findById(100L)).thenReturn(Optional.of(firstTask));
+        stubPushSequential(success("req-firstgen"));
+        processor.process(16L);
+
+        ArgumentCaptor<UUID> firstCap = ArgumentCaptor.forClass(UUID.class);
+        verify(messagingApiClient, times(1))
+                .pushMessage(firstCap.capture(), any(PushMessageRequest.class));
+        UUID firstKey = firstCap.getValue();
+
+        // 模擬 truncate 後重新發推播：chunkId 又是 16、userId 一樣，但 createdAt 變晚一天
+        reset(messagingApiClient);
+        BroadcastChunk secondGen = makeChunk(16L, 101L, List.of("Usame"));
+        secondGen.setCreatedAt(LocalDateTime.of(2026, 5, 29, 10, 0, 0));
+        BroadcastTask secondTask = makeTask(101L, "PUSH");
+        when(chunkRepository.findById(16L)).thenReturn(Optional.of(secondGen));
+        when(taskRepository.findById(101L)).thenReturn(Optional.of(secondTask));
+        stubPushSequential(success("req-secondgen"));
+        processor.process(16L);
+
+        ArgumentCaptor<UUID> secondCap = ArgumentCaptor.forClass(UUID.class);
+        verify(messagingApiClient, times(1))
+                .pushMessage(secondCap.capture(), any(PushMessageRequest.class));
+        UUID secondKey = secondCap.getValue();
+
+        assertThat(firstKey).isNotEqualTo(secondKey);
+    }
+
+    @Test
+    @DisplayName("PUSH：409 retry key already accepted → 視為成功，lineRequestId 用 x-line-accepted-request-id")
+    void push_409RetryKeyAccepted_countsAsSuccess() {
+        BroadcastChunk chunk = makeChunk(9L, 90L, List.of("U1", "U2"));
+        BroadcastTask task = makeTask(90L, "PUSH");
+        stubLookup(chunk, task);
+
+        // 第一筆 200，第二筆 409 + accepted-request-id
+        stubPushSequential(
+                success("req-1"),
+                fail409("accepted-req-xyz"));
+
+        processor.process(9L);
+
+        assertThat(chunk.getStatus()).isEqualTo("SUCCESS");
+        assertThat(chunk.getLineRequestId()).isEqualTo("accepted-req-xyz");
+        verify(counterService).recordChunkResult(90L, 2, 2, 0);
+        verify(queueService, never()).scheduleRetry(anyLong(), anyLong());
+    }
+
+    @Test
+    @DisplayName("MULTICAST：409 retry key already accepted → 整批視為成功")
+    void multicast_409RetryKeyAccepted_countsAsSuccess() {
+        BroadcastChunk chunk = makeChunk(10L, 100L, List.of("U1", "U2", "U3"));
+        BroadcastTask task = makeTask(100L, "MULTICAST");
+        stubLookup(chunk, task);
+
+        MessagingApiClientException ex = mock(MessagingApiClientException.class);
+        lenient().when(ex.getCode()).thenReturn(409);
+        lenient().when(ex.getHeader("x-line-accepted-request-id")).thenReturn("mc-accepted-req");
+        doReturn(CompletableFuture.failedFuture(ex))
+                .when(messagingApiClient).multicast(any(UUID.class), any(MulticastRequest.class));
+
+        processor.process(10L);
+
+        assertThat(chunk.getStatus()).isEqualTo("SUCCESS");
+        assertThat(chunk.getLineRequestId()).isEqualTo("mc-accepted-req");
+        verify(counterService).recordChunkResult(100L, 3, 3, 0);
+        verify(queueService, never()).scheduleRetry(anyLong(), anyLong());
+    }
+
     // ── MULTICAST 模式回歸 ───────────────────────────────────
 
     @Test
@@ -266,6 +344,14 @@ class BroadcastChunkProcessorTest {
     private CompletableFuture<?> fail5xx() {
         MessagingApiClientException ex = mock(MessagingApiClientException.class);
         lenient().when(ex.getCode()).thenReturn(500);
+        return CompletableFuture.failedFuture(ex);
+    }
+
+    /** 409 retry key already accepted：模擬 LINE 端先前已成功接受過此 retry key */
+    private CompletableFuture<?> fail409(String acceptedRequestId) {
+        MessagingApiClientException ex = mock(MessagingApiClientException.class);
+        lenient().when(ex.getCode()).thenReturn(409);
+        lenient().when(ex.getHeader("x-line-accepted-request-id")).thenReturn(acceptedRequestId);
         return CompletableFuture.failedFuture(ex);
     }
 
