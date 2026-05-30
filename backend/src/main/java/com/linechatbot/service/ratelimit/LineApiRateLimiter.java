@@ -54,18 +54,20 @@ public class LineApiRateLimiter {
 
     private final StringRedisTemplate redisTemplate;
 
-    @Value("${broadcast.rate-limit.multicast.capacity:60}")
+    /**
+     * LINE 官方上限：multicast 200 batches/sec、push 2000 req/sec（per channel，所有方案一致）。
+     * 預設取 LINE 上限約 25% 當安全 buffer；高 traffic / 大 OA plan 可用 yml 上調。
+     */
+    @Value("${broadcast.rate-limit.multicast.capacity:50}")
     private int multicastCapacity;
 
-    /** 每秒可補充的 token 數（multicast 每秒 1 個 → 60 req/min） */
-    @Value("${broadcast.rate-limit.multicast.refill-per-second:1}")
+    @Value("${broadcast.rate-limit.multicast.refill-per-second:50}")
     private double multicastRefillPerSecond;
 
-    @Value("${broadcast.rate-limit.push.capacity:300}")
+    @Value("${broadcast.rate-limit.push.capacity:500}")
     private int pushCapacity;
 
-    /** push 每秒 5 個 → 300 req/min（LINE push 上限本身較寬，保守 buffer 即可） */
-    @Value("${broadcast.rate-limit.push.refill-per-second:5}")
+    @Value("${broadcast.rate-limit.push.refill-per-second:500}")
     private double pushRefillPerSecond;
 
     private DefaultRedisScript<Long> script;
@@ -118,6 +120,11 @@ public class LineApiRateLimiter {
             }
         }
         return false;
+    }
+
+    /** 給呼叫端決定動態 chunk size 用：依當前 rate config 換算理想 chunk 大小。 */
+    public double getPushRefillPerSecond() {
+        return pushRefillPerSecond;
     }
 
     private boolean tryAcquire(String key, int capacity, double refillPerMs) {
