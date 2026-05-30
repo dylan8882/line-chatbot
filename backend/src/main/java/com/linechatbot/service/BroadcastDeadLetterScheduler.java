@@ -45,6 +45,10 @@ public class BroadcastDeadLetterScheduler {
     @Value("${broadcast.deadletter.batch-size:50}")
     private int batchSize;
 
+    /** Stream 留多少 entry。ACK 過的不會自動刪、靠 trim 控制長度避免無限長 */
+    @Value("${broadcast.stream.max-len:100000}")
+    private long streamMaxLen;
+
     @Scheduled(fixedDelayString = "${broadcast.deadletter.scan-interval-ms:60000}")
     public void scanAndReclaim() {
         var summary = queueService.pendingSummary();
@@ -81,5 +85,17 @@ public class BroadcastDeadLetterScheduler {
             }
         }
         if (reclaimed > 0) log.info("Dead-letter 已重新處理 {} 個訊息", reclaimed);
+    }
+
+    /**
+     * 定期把 Stream 裁切到 {@link #streamMaxLen} 個 entry。
+     * 跟 PEL 維護同放一處：兩個都屬於 Stream 健康度的 cron 性質維護工。
+     */
+    @Scheduled(fixedDelayString = "${broadcast.stream.trim-interval-ms:600000}")
+    public void trimStream() {
+        long removed = queueService.trim(streamMaxLen);
+        if (removed > 0) {
+            log.info("Stream trim：移除 {} 個過時 entry（maxLen={}）", removed, streamMaxLen);
+        }
     }
 }

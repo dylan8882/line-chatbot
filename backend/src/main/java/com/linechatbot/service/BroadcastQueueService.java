@@ -153,4 +153,15 @@ public class BroadcastQueueService {
         if (claimed == null || claimed.isEmpty()) return null;
         return claimed.get(0);
     }
+
+    /**
+     * 把 Stream 裁切到大約 maxLen 個 entry（approximate trimming，效能較好）。
+     * ACK 過的 entry 也不會被自動清掉、要靠這個維護避免無限長。
+     *
+     * @return 實際移除的 entry 數，nil 視為 0
+     */
+    public long trim(long maxLen) {
+        Long removed = redisTemplate.opsForStream().trim(STREAM_KEY, maxLen, true);
+        return removed == null ? 0L : removed;
+    }
 }
