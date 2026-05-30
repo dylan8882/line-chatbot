@@ -72,6 +72,7 @@ class BroadcastServiceTest {
     @Mock ClickEventRepository clickEventRepository;
     @Mock MessagingApiClient messagingApiClient;
     @Mock CurrentUserService currentUserService;
+    @Mock com.linechatbot.service.ratelimit.LineApiRateLimiter rateLimiter;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private BroadcastService broadcastService;
@@ -83,10 +84,13 @@ class BroadcastServiceTest {
         broadcastService = new BroadcastService(
                 taskRepository, chunkRepository, lineUserRepository, templateService,
                 queueService, counterService, progressService, clickLinkRewriter,
-                clickEventRepository, messagingApiClient, currentUserService, objectMapper);
+                clickEventRepository, messagingApiClient, currentUserService, objectMapper,
+                rateLimiter);
         lenient().when(currentUserService.getCurrentUser()).thenReturn(Optional.empty());
         lenient().when(clickLinkRewriter.rewriteForTask(anyLong(), anyString()))
                 .thenAnswer(inv -> inv.getArgument(1));
+        // PUSH 模式預設 rate 對應 chunkSize：500 × 2 = 1000、夾 max 5000 後 = 1000
+        lenient().when(rateLimiter.getPushRefillPerSecond()).thenReturn(500.0);
     }
 
     // ── create() ───────────────────────────────────────────────

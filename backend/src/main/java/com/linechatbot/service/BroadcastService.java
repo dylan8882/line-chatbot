@@ -65,6 +65,7 @@ public class BroadcastService {
     private final MessagingApiClient messagingApiClient;
     private final CurrentUserService currentUserService;
     private final ObjectMapper objectMapper;
+    private final com.linechatbot.service.ratelimit.LineApiRateLimiter rateLimiter;
 
     private static final Set<String> ALLOWED_TARGET_TYPES = Set.of("ALL", "TAGS", "USER_LIST", "NARROWCAST");
 
@@ -80,10 +81,11 @@ public class BroadcastService {
         return toDetailDTO(task);
     }
 
-    /** 預估收件人數，不寫入任何資料。 */
+    /** 預估收件人數，不寫入任何資料。chunk 數依 apiMode 計算。 */
     public BroadcastEstimateResponse estimate(BroadcastCreateRequest req) {
         List<String> recipients = computeRecipients(req);
-        int chunks = (int) Math.ceil(recipients.size() / (double) BroadcastConfig.CHUNK_SIZE);
+        int chunkSize = computeChunkSize(resolveApiMode(req), recipients.size());
+        int chunks = recipients.isEmpty() ? 0 : (int) Math.ceil(recipients.size() / (double) chunkSize);
         return new BroadcastEstimateResponse(recipients.size(), chunks);
     }
 
@@ -163,10 +165,11 @@ public class BroadcastService {
             return toDTO(task);
         }
 
+        int chunkSize = computeChunkSize(task.getApiMode(), recipients.size());
         int idx = 0;
         List<Long> chunkIds = new ArrayList<>();
-        for (int i = 0; i < recipients.size(); i += BroadcastConfig.CHUNK_SIZE) {
-            List<String> slice = recipients.subList(i, Math.min(i + BroadcastConfig.CHUNK_SIZE, recipients.size()));
+        for (int i = 0; i < recipients.size(); i += chunkSize) {
+            List<String> slice = recipients.subList(i, Math.min(i + chunkSize, recipients.size()));
             BroadcastChunk chunk = BroadcastChunk.builder()
                     .taskId(task.getId())
                     .chunkIndex(idx++)
@@ -384,6 +387,25 @@ public class BroadcastService {
     }
 
     // ── 內部工具 ────────────────────────────────────────────────
+
+    /**
+     * 決定切片大小。
+     * <p>MULTICAST 用 LINE 硬上限 500 人/批；PUSH 依當前 rate limit 換算
+     * 「目標每 chunk 處理時間」決定（rate × {@link BroadcastConfig#PUSH_CHUNK_TARGET_SECONDS} 秒），
+     * 取 [{@link BroadcastConfig#PUSH_CHUNK_MIN}, {@link BroadcastConfig#PUSH_CHUNK_MAX}] 邊界。
+     * <p>這樣 worker 鎖一個 chunk 的時間 ≈ 2 秒，跟 rate config 升降連動。
+     */
+    int computeChunkSize(String apiMode, int totalRecipients) {
+        if ("MULTICAST".equals(apiMode)) {
+            return BroadcastConfig.CHUNK_SIZE;
+        }
+        // PUSH：rate × 目標秒數，再夾在邊界與「不超過總人數」之間
+        int target = (int) Math.ceil(rateLimiter.getPushRefillPerSecond()
+                * BroadcastConfig.PUSH_CHUNK_TARGET_SECONDS);
+        int bounded = Math.min(Math.max(target, BroadcastConfig.PUSH_CHUNK_MIN),
+                BroadcastConfig.PUSH_CHUNK_MAX);
+        return Math.min(bounded, Math.max(totalRecipients, 1));
+    }
 
     private void validateTargetType(String targetType) {
         if (!ALLOWED_TARGET_TYPES.contains(targetType)) {
