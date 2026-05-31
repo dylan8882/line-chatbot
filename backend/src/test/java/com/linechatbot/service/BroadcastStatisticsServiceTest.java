@@ -37,6 +37,8 @@ class BroadcastStatisticsServiceTest {
     @Mock BroadcastChunkRepository chunkRepository;
     @Mock ClickLinkRepository clickLinkRepository;
     @Mock ClickEventRepository clickEventRepository;
+    @Mock org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    @Mock org.springframework.data.redis.core.ValueOperations<String, String> valueOps;
 
     private BroadcastStatisticsService service;
 
@@ -44,7 +46,10 @@ class BroadcastStatisticsServiceTest {
     void setUp() {
         service = new BroadcastStatisticsService(
                 taskRepository, chunkRepository, clickLinkRepository,
-                clickEventRepository, new ObjectMapper());
+                clickEventRepository, new ObjectMapper(), redisTemplate);
+        // 預設 Redis 無未 flush 增量，clickCount 等於 DB 值
+        org.mockito.Mockito.lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        org.mockito.Mockito.lenient().when(valueOps.get(org.mockito.ArgumentMatchers.anyString())).thenReturn(null);
     }
 
     @Test

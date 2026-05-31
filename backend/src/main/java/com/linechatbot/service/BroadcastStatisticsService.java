@@ -40,6 +40,7 @@ public class BroadcastStatisticsService {
     private final ClickLinkRepository clickLinkRepository;
     private final ClickEventRepository clickEventRepository;
     private final ObjectMapper objectMapper;
+    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     /**
      * 任務成效摘要。
@@ -180,7 +181,8 @@ public class BroadcastStatisticsService {
                         .linkId(l.getId())
                         .linkIndex(l.getLinkIndex())
                         .targetUrl(l.getTargetUrl())
-                        .clickCount(l.getClickCount())
+                        // DB 存量 + Redis 未 flush 增量，避免 UI 顯示落後 5 秒的數字
+                        .clickCount((int) (l.getClickCount() + currentRedisDelta(l.getId())))
                         .build())
                 .toList();
 
@@ -195,6 +197,17 @@ public class BroadcastStatisticsService {
     }
 
     // ── 內部 ──────────────────────────────────────────────────
+
+    /** 讀取 Redis 中尚未 flush 進 DB 的 click_count 增量。Redis 無值或解析失敗回 0。 */
+    private long currentRedisDelta(Long linkId) {
+        try {
+            String val = redisTemplate.opsForValue().get(ClickCountFlushScheduler.countKey(linkId));
+            return val == null ? 0L : Long.parseLong(val);
+        } catch (Exception e) {
+            log.debug("讀 Redis click_count delta 失敗：linkId={}, error={}", linkId, e.getMessage());
+            return 0L;
+        }
+    }
 
     private int parseRecipientCount(BroadcastChunk c) {
         try {
