@@ -2,21 +2,23 @@ package com.linechatbot.service;
 
 import com.linechatbot.model.entity.ClickEvent;
 import com.linechatbot.repository.ClickEventRepository;
-import com.linechatbot.repository.ClickLinkRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Click event 非同步寫入器（事件 INSERT + click_count INCR）。
+ * Click event 非同步寫入器（事件 INSERT + Redis click_count INCR + dirty set）。
  *
  * <p>故意拆成獨立 bean，讓 {@link ClickTrackingService} 跨 bean 呼叫，Spring AOP proxy
  * 才會包到 {@code @Async} 與 {@code @Transactional} 兩個 aspect。
- * 同 bean 內 {@code this.xxx()} 屬於 self-invocation，會繞過 proxy、兩個 annotation 都失效，
- * {@link ClickLinkRepository#incrementClickCount(Long)} 這種 {@code @Modifying} JPQL
- * 會抛 {@code TransactionRequiredException}。
+ * 同 bean 內 {@code this.xxx()} 屬於 self-invocation 會繞過 proxy、兩個 annotation 都失效。
+ *
+ * <p><b>click_count 不再直接 UPDATE DB</b>：高 QPS 下同一 row 的 UPDATE +1 會在 InnoDB
+ * 行鎖序列化（30 萬點/小時集中在同一 link = 排隊 25 分鐘）。改成 Redis INCR + dirty set
+ * 累積、由 {@link ClickCountFlushScheduler} 批次回寫 DB，DB 寫入頻率降至每 5 秒 1 次。
  *
  * <p><b>executor 選擇</b>：用獨立的 {@code clickEventExecutor}（core=2, max=8, queue=500），
  * 避免兩個陷阱：
@@ -31,10 +33,10 @@ import org.springframework.transaction.annotation.Transactional;
 public class ClickEventWriter {
 
     private final ClickEventRepository eventRepository;
-    private final ClickLinkRepository linkRepository;
+    private final StringRedisTemplate redisTemplate;
 
     /**
-     * 在獨立執行緒上寫一筆 click_event、並原子遞增 click_links.click_count。
+     * 在獨立執行緒上寫 click_event + Redis 累計 click_count。
      * 例外吞掉只記 warn — 點擊事件寫入失敗不能影響 redirect 回應。
      */
     @Async("clickEventExecutor")
@@ -48,7 +50,9 @@ public class ClickEventWriter {
                     .ip(truncate(ip, 45))
                     .referer(truncate(referer, 500))
                     .build());
-            linkRepository.incrementClickCount(linkId);
+            // click_count 累積到 Redis、ClickCountFlushScheduler 會批次刷回 DB
+            redisTemplate.opsForValue().increment(ClickCountFlushScheduler.countKey(linkId));
+            redisTemplate.opsForSet().add(ClickCountFlushScheduler.DIRTY_SET, String.valueOf(linkId));
         } catch (Exception e) {
             log.warn("寫入 click_event 失敗：linkId={}, error={}", linkId, e.getMessage());
         }
