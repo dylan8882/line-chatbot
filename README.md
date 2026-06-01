@@ -491,6 +491,69 @@ ADMIN > MANAGER > MARKETER > CS_AGENT > VIEWER
 - **前端**：`usePermissions` 自製 hook 依角色隱藏按鈕
 - **稽核**：`CurrentUserService` 從安全脈絡取出當前使用者，自動寫入 `created_by`
 
+### 5.14 Java 執行緒池分工與並發控制
+
+後端依任務性質分為三個獨立的 `ThreadPoolTaskExecutor`，避免單一池被慢任務或無限迴圈佔滿：
+
+| 執行緒池 | 規格 | 用途 |
+|---|---|---|
+| `lineMessageExecutor` | core 10 / max 50 / queue 1000 | LINE Webhook 訊息處理（QA / AI 回覆）|
+| `broadcastWorkerExecutor` | core 4 / max 16 / queue 100 | 推播 worker 無限迴圈 |
+| `clickEventExecutor` | core 2 / max 8 / queue 500 | 點擊事件寫入 |
+
+點擊事件刻意獨立成池，原因有二：
+
+- 共用 `broadcastWorkerExecutor` 時 core 4 全被 worker 無限迴圈永久佔住、任務只能 enqueue 無法執行
+- 共用 `lineMessageExecutor` 時點擊爆量會拖過 Webhook 的 5 秒 SLA
+
+三池統一採 `CallerRunsPolicy`，佇列滿時退化為同步處理、拖慢呼叫端但不丟事件。各池對此策略的取捨：
+
+- `clickEventExecutor`：有意識的取捨，拖慢 redirect 比丟事件好
+- `broadcastWorkerExecutor`：只在 `@PostConstruct` 一次性提交 4 個 worker，佇列實務上不會被填滿
+- `lineMessageExecutor`：極端積壓下會延遲 webhook 的 5 秒 SLA，目前以 queue 1000 + max 50 的緩衝吸收尖峰，後續可視實際流量改為 `AbortPolicy` 顯式接住
+
+**Spring AOP self-invocation 規避**：`ClickEventWriter` 拆成獨立 bean，不放回 `ClickTrackingService` 內：
+
+- 同 bean 內 `this.xxx()` 屬於 self-invocation、會繞過 Spring AOP proxy → `@Async` 與 `@Transactional` 都會失效
+- 跨 bean 呼叫才會經過 proxy → 兩個 annotation 正常生效
+
+**Worker 生命週期管理**：`BroadcastWorkerManager` 用 Spring lifecycle annotation 控制啟動與收尾：
+
+- `@PostConstruct`：啟動 4 個 worker 執行緒，每個跑無限迴圈持續讀 Stream
+- `@PreDestroy`：把 `AtomicBoolean` 切成 false，下一輪迴圈跑完後自然結束，不會留下做到一半的工作
+
+XREADGROUP 的阻塞時間設為 4000 毫秒，比 Lettuce 的 `commandTimeout`（5000 毫秒）短一秒；不這麼做的話「暫時等不到新訊息」這種正常情況會被 Lettuce 當成 `RedisCommandTimeoutException` 拋出來，錯誤日誌會被無謂的 timeout 例外淹沒。
+
+**阻塞式 Token Bucket**：
+
+```java
+public boolean acquirePush(long waitMaxMs) {
+    long deadline = System.currentTimeMillis() + waitMaxMs;
+    while (System.currentTimeMillis() < deadline) {
+        if (tryAcquirePush()) return true;
+        Thread.sleep(20);
+    }
+    return false;
+}
+```
+
+跟 `Semaphore.tryAcquire(timeout)` 直接把執行緒卡在原地等不一樣：worker 拿不到 token 就先睡一下，時間還沒到就再試一次，時間到了就主動回 false，由呼叫端決定下一步要走哪條路（直接重試、丟進 retry sorted set 慢慢退避、或乾脆跳過）。
+
+**容器層調校**：
+
+```yaml
+server.tomcat:
+  threads:  { max: 200, min-spare: 20 }
+  accept-count: 100
+  connection-timeout: 5000
+
+spring.datasource.hikari:
+  maximum-pool-size: 20
+  minimum-idle: 5
+  connection-timeout: 30000
+  max-lifetime: 1800000        # 30 分鐘輪汰，避開 MySQL wait_timeout 斷連線
+```
+
 ---
 
 ## 六、開發階段與里程碑
