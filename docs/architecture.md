@@ -139,7 +139,29 @@ erDiagram
 
 ---
 
-## 三、Commit 結構
+## 三、一致性與可用性取捨（CAP）
+
+分散式系統無法同時兼顧 Consistency / Availability / Partition tolerance，本系統運行於 Redis 中介層 + 關聯式資料庫 + 多 Spring Boot 實例（為水平擴展預留）的架構下，每份關鍵資料各自取捨：
+
+| 資料 | 取捨 | 理由與影響 |
+|------|------|-----------|
+| `click_count`（DB 欄位 + Redis buffer） | **AP**（可用性優先） | Redis 累計、5 秒批次回寫 DB；Redis crash 最多丟失最後 5 秒的點擊。點擊統計屬「觀測性資料」，容忍少量遺失以換取低延遲與規避 hot row |
+| `click_events`（事件流 INSERT） | **AP** | `@Async` 非同步寫入、`CallerRunsPolicy` 退化為同步以保證不丟事件；DB 真寫不進去時 worker 才 log warn、redirect 仍正常 |
+| `broadcast_tasks.status` / `broadcast_chunks.status` | **CP**（一致性優先） | 多實例 worker 從 Redis Stream Consumer Group 領 chunk，必須對任務狀態看到同一份結果；以 DB 交易 + Stream PEL 保證 at-least-once，再靠 LINE retry key 達成業務層 exactly-once |
+| Broadcast 限速桶（Redis Lua token bucket） | **CP** | 多實例共享同一個桶、Lua 腳本在 Redis 端原子 refill + consume；Redis 不可用時整個推播停擺（無法限速 = 無法保證不超過 LINE quota） |
+| Broadcast 進度推送（Pub/Sub → SSE） | **AP** | 訊息掉了沒事、前端在連線恢復後重拉一次快照即可；使用 Pub/Sub 而非 Stream 是因為「即時性 > 補齊」 |
+| `multicast_daily_delivery`（dashboard cache） | **AP**（5 分鐘 TTL） | LINE 平台回的本來就是估計值、cache miss 也只是多打一次 LINE API；TTL 在控制讀寫頻率而非一致性 |
+| QA 規則 cache | **AP** | Cache miss 回 DB 取一次再寫回 Redis；TTL 1 小時、QA 變更後主動 evict，容忍短暫舊資料 |
+
+### 系統可用性的單點
+
+- **Redis**：佇列、限速桶、計數 buffer、Pub/Sub 全部依賴 Redis；Redis crash 推播系統整個癱瘓。Production 環境應採 Redis Sentinel（主從 failover）或 Redis Cluster（分片 + 容錯）以消除此 SPOF
+- **MySQL / PostgreSQL**：DB crash 後 worker 無法寫狀態，但 Redis 累計仍會收到事件；DB 恢復後可從 Redis dirty set 回補近期計數
+- **LINE API**：外部依賴，4xx 視為用戶級失敗（不重試）、5xx 與 timeout 進退避重試 zset；LINE 全平台中斷時推播停擺，屬可接受的外部風險
+
+---
+
+## 四、Commit 結構
 
 對應 [`README.md`](../README.md) §六的 Phase 0–12，每個階段都對應獨立 commit、可逐步用 `git log` 追蹤實作演進。
 
@@ -207,7 +229,7 @@ feat: 點擊統計讀取補上 Redis 未 flush 增量
 
 ---
 
-## 四、已知限制與未實作項目
+## 五、已知限制與未實作項目
 
 誠實揭露目前邊界，避免訪客誤解專案完成度：
 
@@ -218,7 +240,7 @@ feat: 點擊統計讀取補上 Redis 未 flush 增量
 
 ---
 
-## 五、本機開發（30 分鐘上手）
+## 六、本機開發（30 分鐘上手）
 
 ```bash
 # 1. 起 DB + Redis
@@ -243,7 +265,7 @@ cd backend && mvn test
 
 ---
 
-## 六、截圖檔案清單
+## 七、截圖檔案清單
 
 `docs/img/` 內容對照（供日後維護參考）：
 
